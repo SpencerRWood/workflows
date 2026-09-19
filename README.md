@@ -33,13 +33,13 @@ permissions:
 jobs:
   release:
     uses: SpencerRWood/workflows/.github/workflows/release.yml@v1
-    secrets:
-      github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-The caller must grant `contents: write`. The only required secret is
-`github_token`, supplied from `secrets.GITHUB_TOKEN`. dbt parsing additionally
-requires `dbt_host`, `dbt_user`, `dbt_password`, `dbt_database`, and `dbt_schema`.
+The caller must grant `contents: write`. GitHub automatically provides
+`secrets.GITHUB_TOKEN` to the called workflow; it must not be redeclared or
+mapped under another name. dbt parsing additionally requires `dbt_host`,
+`dbt_user`, `dbt_password`, and `dbt_schema`; `dbt_port` and `dbt_dbname` are
+optional.
 
 ## Release configuration
 
@@ -156,6 +156,6 @@ The public workflow checks out the consumer repository with full history, loads
 its configuration using `scripts/release_config.py`, installs locked
 dependencies, runs only the declared capabilities, and invokes
 `semantic-release version --vcs-release` only after every selected check passes.
-It has no public workflow inputs. It uses `github_token` for semantic-release
-and exposes no outputs or artifacts. Container publishing, deployment, and
+It has no public workflow inputs. It uses the automatic `GITHUB_TOKEN` for
+semantic-release and exposes no outputs or artifacts. Container publishing, deployment, and
 infrastructure provisioning remain outside this repository's current scope.
