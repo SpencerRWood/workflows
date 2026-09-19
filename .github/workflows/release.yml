@@ -49,7 +49,7 @@ jobs:
           # a reusable workflow, not this repository's workflow SHA.
           repository: SpencerRWood/workflows
           ref: v1
-          path: ../workflow-contract
+          path: .workflow-contract
           persist-credentials: false
 
       - name: Set up configuration Python
@@ -59,7 +59,7 @@ jobs:
 
       - name: Load release configuration
         id: config
-        run: python ../workflow-contract/scripts/release_config.py .github/release.toml
+        run: python .workflow-contract/scripts/release_config.py .github/release.toml
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -181,7 +181,8 @@ jobs:
         if: ${{ steps.config.outputs.check_pre_commit == 'true' }}
         env:
           SKIP: no-commit-to-branch
-        run: uv run --directory ${{ steps.config.outputs.working_directory }} pre-commit run --all-files
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: git ls-files -z | xargs -0 uv run pre-commit run --files
 
       - name: Run semantic-release
         working-directory: ${{ steps.config.outputs.working_directory }}
