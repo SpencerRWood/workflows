@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  workflow_call:
+    secrets:
+      github_token:
+        description: Token used by semantic-release to create GitHub releases.
+        required: true
+      dbt_host:
+        description: dbt connection host, required only for the dbt-parse capability.
+        required: false
+      dbt_user:
+        description: dbt connection user, required only for the dbt-parse capability.
+        required: false
+      dbt_password:
+        description: dbt connection password, required only for the dbt-parse capability.
+        required: false
+      dbt_database:
+        description: dbt database, required only for the dbt-parse capability.
+        required: false
+      dbt_schema:
+        description: dbt schema, required only for the dbt-parse capability.
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out consumer repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check out workflow implementation
+        uses: actions/checkout@v6
+        with:
+          repository: SpencerRWood/workflows
+          ref: ${{ github.workflow_sha }}
+          path: .workflow-contract
+          persist-credentials: false
+
+      - name: Set up configuration Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Load release configuration
+        id: config
+        run: python .workflow-contract/scripts/release_config.py .github/release.toml
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ steps.config.outputs.python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            ${{ steps.config.outputs.working_directory }}/pyproject.toml
+            ${{ steps.config.outputs.working_directory }}/uv.lock
+
+      - name: Set up Node
+        if: ${{ steps.config.outputs.node_enabled == 'true' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ steps.config.outputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ steps.config.outputs.node_directory }}/package-lock.json
+
+      - name: Sync Python dependencies
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
+
+      - name: Install Node dependencies
+        if: ${{ steps.config.outputs.node_enabled == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm ci
+
+      - name: Run Ruff lint
+        if: ${{ steps.config.outputs.check_ruff == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run ruff check .
+
+      - name: Run Ruff format check
+        if: ${{ steps.config.outputs.check_ruff_format == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run ruff format --check .
+
+      - name: Run mypy
+        if: ${{ steps.config.outputs.check_mypy == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run mypy
+
+      - name: Run pytest
+        if: ${{ steps.config.outputs.check_pytest == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run pytest
+
+      - name: Validate Docker Compose
+        if: ${{ steps.config.outputs.check_docker_compose == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: docker compose config
+
+      - name: Run SQLFluff
+        if: ${{ steps.config.outputs.check_sqlfluff == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run sqlfluff lint . --templater jinja
+
+      - name: Run dbt dependencies
+        if: ${{ steps.config.outputs.check_dbt_deps == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run dbt deps
+
+      - name: Run dbt parse
+        if: ${{ steps.config.outputs.check_dbt_parse == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          DBT_HOST: ${{ secrets.dbt_host }}
+          DBT_USER: ${{ secrets.dbt_user }}
+          DBT_PASSWORD: ${{ secrets.dbt_password }}
+          DBT_DATABASE: ${{ secrets.dbt_database }}
+          DBT_SCHEMA: ${{ secrets.dbt_schema }}
+          DBT_PROFILES_EXAMPLE: ${{ steps.config.outputs.dbt_profiles_example }}
+        run: |
+          test -n "$DBT_HOST" && test -n "$DBT_USER" && test -n "$DBT_PASSWORD" && test -n "$DBT_DATABASE" && test -n "$DBT_SCHEMA" || {
+            echo "The dbt-parse capability requires dbt_host, dbt_user, dbt_password, dbt_database, and dbt_schema secrets." >&2
+            exit 1
+          }
+          cp "$DBT_PROFILES_EXAMPLE" profiles.yml
+          uv run dbt parse --profiles-dir . --no-version-check
+
+      - name: Run Node lint
+        if: ${{ steps.config.outputs.node_check_lint == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm run lint
+
+      - name: Run Node typecheck
+        if: ${{ steps.config.outputs.node_check_typecheck == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm run typecheck
+
+      - name: Run Node tests
+        if: ${{ steps.config.outputs.node_check_test == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm test -- --run
+
+      - name: Build Node application
+        if: ${{ steps.config.outputs.node_check_build == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm run build
+
+      - name: Build Python package
+        if: ${{ steps.config.outputs.build_python_package == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv build
+
+      - name: Run pre-commit
+        if: ${{ steps.config.outputs.check_pre_commit == 'true' }}
+        env:
+          SKIP: no-commit-to-branch
+        run: uv run --directory ${{ steps.config.outputs.working_directory }} pre-commit run --all-files
+
+      - name: Run semantic-release
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
+        run: uv run semantic-release version --vcs-release

@@ -1,39 +1,24 @@
 # Centralized GitHub Actions Workflows
 
-This repository owns the centralized reusable GitHub Actions workflows for the
-Wood project repositories.
+`release.yml` is the single stable public reusable release contract for Wood
+repositories. It is called with `workflow_call`; project archetypes are internal
+implementation concerns, not workflow APIs. Consumers declare their required
+capabilities in `.github/release.toml` and should never reference implementation
+files in this repository.
 
-Reusable workflows will expose their supported contracts with `workflow_call`.
-Consuming repositories should ultimately pin to a stable major contract such as
-`@v1`; `@main` is not a long-term consumer contract. Development takes place on
-`main`, with future breaking workflow contracts released as `v2` and later
-major versions.
+Consumers will eventually pin the public contract to a stable major version:
+`SpencerRWood/workflows/.github/workflows/release.yml@v1`. Development happens
+on `main`; a future breaking public contract will be released as `v2`. Consumers
+must not use `@main` as their long-term contract. No `v1` tag exists yet.
 
-Release validation, semantic-release, container publishing, and deployment
-automation will ultimately live here. Application-specific configuration remains
-in each application repository. Infrastructure provisioning will live separately
-in the future `infrastructure` repository.
+The canonical contract intentionally has no compatibility mode or repository
+name exceptions. Repositories must converge on the quality checks their own
+configuration declares. The five repositories currently undergoing substantial
+refactors are deferred from migration and do not influence this contract.
 
-## Reusable release workflows
+## Future consumer wrapper
 
-Every workflow below is reusable through `workflow_call`. Each validates the
-consumer checkout before running `uv run semantic-release version --vcs-release`.
-The caller must grant `contents: write` and pass `secrets.GITHUB_TOKEN` as the
-required `github_token` secret.
-
-| Workflow | Consumer type | Inputs | Additional secrets | Validation |
-| --- | --- | --- | --- | --- |
-| `python-release.yml` | Python CLI, API client, analytics, or automation project | Optional `working_directory`, `python_version` | None | uv sync, mypy, pytest, pre-commit |
-| `python-quality-release.yml` | Python library or quality-focused package | Optional `working_directory`, `python_version`, `coverage_target` | None | uv sync, Ruff lint/format, mypy, pytest, optional coverage, pre-commit |
-| `fastapi-service-release.yml` | FastAPI service with Compose configuration | Optional `working_directory`, `python_version` | None | uv sync, mypy, pytest, `docker compose config`, pre-commit |
-| `fastapi-react-release.yml` | FastAPI backend plus React frontend | Optional backend/frontend directories and Python/Node versions | None | backend mypy/pytest/build; frontend npm lint/typecheck/test/build; pre-commit |
-| `dbt-release.yml` | dbt project | Optional `python_version`, `dbt_parse_enabled` | Optional dbt connection secrets | uv sync, Ruff lint/format, SQLFluff, dbt deps, optional dbt parse, pre-commit |
-
-The dbt connection secrets are `dbt_host`, `dbt_user`, `dbt_password`,
-`dbt_database`, and `dbt_schema`; they are required only when
-`dbt_parse_enabled` is true. No workflow emits outputs or uploads artifacts.
-
-Future consumer wrappers will be intentionally thin. For example:
+Every consumer wrapper is intentionally almost identical:
 
 ```yaml
 name: Release
@@ -47,11 +32,121 @@ permissions:
 
 jobs:
   release:
-    uses: SpencerRWood/workflows/.github/workflows/python-release.yml@v1
+    uses: SpencerRWood/workflows/.github/workflows/release.yml@v1
     secrets:
       github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Consumers should use a stable major contract such as `@v1`, never `@main` as
-their long-term dependency. No `v1` tag exists yet; it will be created only
-after the first consumer migrations are validated.
+The caller must grant `contents: write`. The only required secret is
+`github_token`, supplied from `secrets.GITHUB_TOKEN`. dbt parsing additionally
+requires `dbt_host`, `dbt_user`, `dbt_password`, `dbt_database`, and `dbt_schema`.
+
+## Release configuration
+
+Each consumer owns `.github/release.toml`. Schema version 1 has these tables:
+
+| Table | Required fields | Purpose |
+| --- | --- | --- |
+| Root | `version = 1` | Selects the release configuration schema. |
+| `[python]` | none | Python `version` (default `3.14`) and `dependency_group` (default `dev`). |
+| `[validation]` | `checks` | A non-empty list of declared validation capabilities. |
+| `[release]` | `semantic_release = true` | Keeps semantic-release mandatory for this release contract. |
+| `[project]` | none | Repository-relative `working_directory` (default `.`). |
+| `[build]` | none | `python_package = true` enables `uv build`. |
+| `[node]` | all fields when present | Enables locked npm setup and Node checks. |
+| `[dbt]` | none | `profiles_example` for the `dbt-parse` capability (default `profiles.example.yml`). |
+
+Supported Python validation capabilities are `ruff`, `ruff-format`, `mypy`,
+`pytest`, `pre-commit`, `docker-compose`, `sqlfluff`, `dbt-deps`, and
+`dbt-parse`. `dbt-parse` requires `dbt-deps` and the five dbt secrets. A Node
+table enables npm validation; its `checks` may contain `lint`, `typecheck`,
+`test`, and `build`. The loader rejects invalid TOML, unknown capabilities,
+unsafe paths, missing lockfiles, and incomplete capability combinations before
+dependency installation.
+
+### Python package or CLI
+
+```toml
+version = 1
+
+[python]
+version = "3.14"
+
+[validation]
+checks = ["ruff", "ruff-format", "mypy", "pytest", "pre-commit"]
+
+[build]
+python_package = true
+
+[release]
+semantic_release = true
+```
+
+### Python service with Docker Compose
+
+```toml
+version = 1
+
+[python]
+version = "3.14"
+
+[validation]
+checks = ["ruff", "ruff-format", "mypy", "pytest", "docker-compose", "pre-commit"]
+
+[release]
+semantic_release = true
+```
+
+### Python and React application
+
+```toml
+version = 1
+
+[project]
+working_directory = "backend"
+
+[python]
+version = "3.14"
+
+[validation]
+checks = ["mypy", "pytest", "pre-commit"]
+
+[node]
+directory = "frontend"
+version = "24"
+checks = ["lint", "typecheck", "test", "build"]
+
+[build]
+python_package = true
+
+[release]
+semantic_release = true
+```
+
+### dbt project
+
+```toml
+version = 1
+
+[python]
+version = "3.14"
+
+[validation]
+checks = ["ruff", "ruff-format", "sqlfluff", "dbt-deps", "dbt-parse", "pre-commit"]
+
+[dbt]
+profiles_example = "profiles.example.yml"
+
+[release]
+semantic_release = true
+```
+
+## Implementation
+
+The public workflow checks out the consumer repository with full history, loads
+its configuration using `scripts/release_config.py`, installs locked
+dependencies, runs only the declared capabilities, and invokes
+`semantic-release version --vcs-release` only after every selected check passes.
+It has no public workflow inputs. It uses `github_token` for semantic-release
+and exposes no outputs or artifacts. Container publishing, deployment, and
+infrastructure provisioning remain outside this repository's current scope.
