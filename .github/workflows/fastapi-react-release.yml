@@ -1,0 +1,106 @@
+name: FastAPI and React release
+
+on:
+  workflow_call:
+    inputs:
+      backend_directory:
+        description: Backend directory containing pyproject.toml and uv.lock.
+        required: false
+        type: string
+        default: backend
+      frontend_directory:
+        description: Frontend directory containing package-lock.json.
+        required: false
+        type: string
+        default: frontend
+      python_version:
+        description: Python version used for backend validation.
+        required: false
+        type: string
+        default: "3.14"
+      node_version:
+        description: Node version used for frontend validation.
+        required: false
+        type: string
+        default: "24"
+    secrets:
+      github_token:
+        description: Token used by semantic-release to create GitHub releases.
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Pin release branch to workflow commit
+        run: git reset --hard ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            ${{ inputs.backend_directory }}/pyproject.toml
+            ${{ inputs.backend_directory }}/uv.lock
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.frontend_directory }}/package-lock.json
+
+      - name: Sync backend dependencies
+        working-directory: ${{ inputs.backend_directory }}
+        run: uv sync --frozen --group dev
+
+      - name: Install frontend dependencies
+        working-directory: ${{ inputs.frontend_directory }}
+        run: npm ci
+
+      - name: Validate backend
+        working-directory: ${{ inputs.backend_directory }}
+        run: |
+          uv run mypy
+          uv run pytest
+          uv build
+
+      - name: Validate frontend
+        working-directory: ${{ inputs.frontend_directory }}
+        run: |
+          npm run lint
+          npm run typecheck
+          npm test -- --run
+          npm run build
+
+      - name: Run pre-commit
+        env:
+          SKIP: no-commit-to-branch
+        run: uv run --directory ${{ inputs.backend_directory }} pre-commit run --all-files
+
+      - name: Run semantic release
+        working-directory: ${{ inputs.backend_directory }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
+        run: uv run semantic-release version --vcs-release

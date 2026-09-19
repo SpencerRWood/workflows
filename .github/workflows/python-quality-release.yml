@@ -1,0 +1,93 @@
+name: Python quality release
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Directory containing pyproject.toml and uv.lock.
+        required: false
+        type: string
+        default: .
+      python_version:
+        description: Python version used for validation.
+        required: false
+        type: string
+        default: "3.14"
+      coverage_target:
+        description: Optional package path passed to pytest-cov.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      github_token:
+        description: Token used by semantic-release to create GitHub releases.
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Pin release branch to workflow commit
+        run: git reset --hard ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            ${{ inputs.working_directory }}/pyproject.toml
+            ${{ inputs.working_directory }}/uv.lock
+
+      - name: Sync dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Run Ruff lint
+        run: uv run ruff check .
+
+      - name: Run Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Run mypy
+        run: uv run mypy
+
+      - name: Run pytest
+        if: ${{ inputs.coverage_target == '' }}
+        run: uv run pytest
+
+      - name: Run pytest with coverage
+        if: ${{ inputs.coverage_target != '' }}
+        run: uv run pytest --cov=${{ inputs.coverage_target }} --cov-report=term-missing
+
+      - name: Run pre-commit
+        env:
+          SKIP: no-commit-to-branch
+        run: uv run pre-commit run --all-files
+
+      - name: Run semantic release
+        env:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
+        run: uv run semantic-release version --vcs-release
