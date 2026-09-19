@@ -3,6 +3,9 @@ name: Release
 on:
   workflow_call:
     secrets:
+      github_token:
+        description: GitHub token used by semantic-release to publish repository releases.
+        required: true
       dbt_host:
         description: dbt connection host, required only for the dbt-parse capability.
         required: false
@@ -187,5 +190,5 @@ jobs:
       - name: Run semantic-release
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.github_token }}
         run: uv run semantic-release version --vcs-release
