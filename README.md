@@ -153,8 +153,10 @@ semantic_release = true
 
 ## Implementation
 
-The public workflow checks out the consumer repository with full history, loads
-its configuration using `scripts/release_config.py`, installs locked
+The public workflow checks out the consumer repository with full history and
+clones its own helper implementation into the runner's temporary directory,
+outside the consumer checkout. It then loads the consumer configuration using
+`scripts/release_config.py`, installs locked
 dependencies, runs only the declared capabilities, and invokes
 `semantic-release version --vcs-release` only after every selected check passes.
 It has no public workflow inputs. It uses the automatic `GITHUB_TOKEN` for

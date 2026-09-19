@@ -100,6 +100,31 @@ semantic_release = true
         )
         self.assertIn('git -C "$GITHUB_WORKSPACE" ls-files -z', workflow)
 
+    def test_helper_checkout_is_outside_consumer_workspace(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            'git clone --depth 1 --branch v1 https://github.com/SpencerRWood/workflows.git "$RUNNER_TEMP/workflow-contract"',
+            workflow,
+        )
+        self.assertIn(
+            'python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml',
+            workflow,
+        )
+        self.assertNotIn(".workflow-contract", workflow)
+
+    def test_consumer_validation_stays_in_configured_working_directory(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            workflow.count("working-directory: ${{ steps.config.outputs.working_directory }}"),
+            10,
+        )
+        self.assertIn("working-directory: ${{ steps.config.outputs.node_directory }}", workflow)
+
+    def test_public_workflow_contract_has_no_inputs(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("on:\n  workflow_call:", workflow)
+        self.assertNotIn("workflow_call:\n    inputs:", workflow)
+
     def test_compose_capability_is_exposed(self) -> None:
         result, outputs = self.run_config(
             """version = 1

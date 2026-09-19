@@ -42,15 +42,9 @@ jobs:
           fetch-depth: 0
 
       - name: Check out workflow implementation
-        uses: actions/checkout@v6
-        with:
-          # The public v1 contract always obtains its helpers from the same
-          # stable contract tag. `github.workflow_sha` is the caller's SHA in
-          # a reusable workflow, not this repository's workflow SHA.
-          repository: SpencerRWood/workflows
-          ref: v1
-          path: .workflow-contract
-          persist-credentials: false
+        # Keep helper code outside the consumer checkout so repository tools
+        # cannot scan it as application code.
+        run: git clone --depth 1 --branch v1 https://github.com/SpencerRWood/workflows.git "$RUNNER_TEMP/workflow-contract"
 
       - name: Set up configuration Python
         uses: actions/setup-python@v6
@@ -59,7 +53,7 @@ jobs:
 
       - name: Load release configuration
         id: config
-        run: python .workflow-contract/scripts/release_config.py .github/release.toml
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
 
       - name: Set up Python
         uses: actions/setup-python@v6
