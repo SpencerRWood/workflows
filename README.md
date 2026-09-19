@@ -50,6 +50,7 @@ Each consumer owns `.github/release.toml`. Schema version 1 has these tables:
 | Root | `version = 1` | Selects the release configuration schema. |
 | `[python]` | none | Python `version` (default `3.14`) and `dependency_group` (default `dev`). |
 | `[validation]` | `checks` | A non-empty list of declared validation capabilities. |
+| `[coverage]` | `target` when selected | Declares the package/module measured by `pytest-coverage`. |
 | `[release]` | `semantic_release = true` | Keeps semantic-release mandatory for this release contract. |
 | `[project]` | none | Repository-relative `working_directory` (default `.`). |
 | `[build]` | none | `python_package = true` enables `uv build`. |
@@ -57,8 +58,13 @@ Each consumer owns `.github/release.toml`. Schema version 1 has these tables:
 | `[dbt]` | none | `profiles_example` for the `dbt-parse` capability (default `profiles.example.yml`). |
 
 Supported Python validation capabilities are `ruff`, `ruff-format`, `mypy`,
-`pytest`, `pre-commit`, `docker-compose`, `sqlfluff`, `dbt-deps`, and
-`dbt-parse`. `dbt-parse` requires `dbt-deps` and the five dbt secrets. A Node
+`pytest`, `pytest-coverage`, `pre-commit`, `docker-compose`, `sqlfluff`,
+`dbt-deps`, and `dbt-parse`. `pytest-coverage` requires `pytest` and a
+`coverage.target`. `dbt-parse` requires `dbt-deps`; it runs only when the
+consumer's `DBT_PARSE_ENABLED` repository variable is `true`, and then requires
+the `dbt_host`, `dbt_user`, and `dbt_password` secrets. Optional `dbt_port`,
+`dbt_dbname`, and `dbt_schema` secrets map to the corresponding standard dbt
+environment variables. A Node
 table enables npm validation; its `checks` may contain `lint`, `typecheck`,
 `test`, and `build`. The loader rejects invalid TOML, unknown capabilities,
 unsafe paths, missing lockfiles, and incomplete capability combinations before
@@ -73,7 +79,10 @@ version = 1
 version = "3.14"
 
 [validation]
-checks = ["ruff", "ruff-format", "mypy", "pytest", "pre-commit"]
+checks = ["ruff", "ruff-format", "mypy", "pytest", "pytest-coverage", "pre-commit"]
+
+[coverage]
+target = "example_package"
 
 [build]
 python_package = true

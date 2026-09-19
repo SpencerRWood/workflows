@@ -18,6 +18,7 @@ VALID_CHECKS = frozenset(
         "ruff-format",
         "mypy",
         "pytest",
+        "pytest-coverage",
         "pre-commit",
         "docker-compose",
         "sqlfluff",
@@ -26,11 +27,12 @@ VALID_CHECKS = frozenset(
     }
 )
 VALID_NODE_CHECKS = frozenset({"lint", "typecheck", "test", "build"})
-TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "build", "node", "dbt", "release"})
+TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "release"})
 TABLE_FIELDS = {
     "project": frozenset({"working_directory"}),
     "python": frozenset({"version", "dependency_group"}),
     "validation": frozenset({"checks"}),
+    "coverage": frozenset({"target"}),
     "build": frozenset({"python_package"}),
     "node": frozenset({"directory", "version", "checks"}),
     "dbt": frozenset({"profiles_example"}),
@@ -146,6 +148,7 @@ def main() -> None:
         "project": project,
         "python": python,
         "validation": validation,
+        "coverage": mapping(config.get("coverage", {}), "coverage"),
         "build": mapping(config.get("build", {}), "build"),
         "node": mapping(config.get("node", {}), "node"),
         "dbt": mapping(config.get("dbt", {}), "dbt"),
@@ -163,6 +166,8 @@ def main() -> None:
         "python.dependency_group",
     )
     checks = strings(validation.get("checks"), "validation.checks", VALID_CHECKS)
+    if "pytest-coverage" in checks and "pytest" not in checks:
+        fail("validation.checks must include pytest when it includes pytest-coverage.")
     if not boolean(release.get("semantic_release"), "release.semantic_release"):
         fail("release.semantic_release must be true for the canonical release contract.")
 
@@ -173,6 +178,10 @@ def main() -> None:
 
     build = mapping(config.get("build", {}), "build")
     python_package = boolean(build.get("python_package"), "build.python_package")
+    coverage = mapping(config.get("coverage", {}), "coverage")
+    coverage_target = string(coverage.get("target"), "coverage.target", "")
+    if "pytest-coverage" in checks and not coverage_target:
+        fail("coverage.target is required when validation.checks includes pytest-coverage.")
 
     node = mapping(config.get("node", {}), "node")
     node_enabled = bool(node)
@@ -201,6 +210,7 @@ def main() -> None:
     emit("python_version", python_version)
     emit("dependency_group", dependency_group)
     emit("build_python_package", python_package)
+    emit("coverage_target", coverage_target)
     emit("node_enabled", node_enabled)
     emit("node_directory", node_directory)
     emit("node_version", node_version)

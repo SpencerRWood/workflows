@@ -88,6 +88,34 @@ semantic_release = true
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("check_docker_compose=true", outputs)
 
+    def test_coverage_requires_a_target_and_pytest(self) -> None:
+        result, _ = self.run_config(
+            """version = 1
+[python]
+[validation]
+checks = ["pytest", "pytest-coverage"]
+[release]
+semantic_release = true
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("coverage.target", result.stderr)
+
+    def test_coverage_configuration(self) -> None:
+        result, outputs = self.run_config(
+            """version = 1
+[python]
+[validation]
+checks = ["pytest", "pytest-coverage"]
+[coverage]
+target = "example_package"
+[release]
+semantic_release = true
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("coverage_target=example_package", outputs)
+
     def test_dbt_configuration(self) -> None:
         result, outputs = self.run_config(
             """version = 1

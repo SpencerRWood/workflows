@@ -15,11 +15,14 @@ on:
       dbt_password:
         description: dbt connection password, required only for the dbt-parse capability.
         required: false
-      dbt_database:
-        description: dbt database, required only for the dbt-parse capability.
+      dbt_port:
+        description: Optional dbt connection port for the dbt-parse capability.
+        required: false
+      dbt_dbname:
+        description: Optional dbt database name for the dbt-parse capability.
         required: false
       dbt_schema:
-        description: dbt schema, required only for the dbt-parse capability.
+        description: Optional dbt schema for the dbt-parse capability.
         required: false
 
 permissions:
@@ -104,9 +107,16 @@ jobs:
         run: uv run mypy
 
       - name: Run pytest
-        if: ${{ steps.config.outputs.check_pytest == 'true' }}
+        if: ${{ steps.config.outputs.check_pytest == 'true' && steps.config.outputs.check_pytest_coverage != 'true' }}
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv run pytest
+
+      - name: Run pytest with coverage
+        if: ${{ steps.config.outputs.check_pytest_coverage == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          PYTEST_COVERAGE_TARGET: ${{ steps.config.outputs.coverage_target }}
+        run: uv run pytest --cov="$PYTEST_COVERAGE_TARGET" --cov-report=term-missing
 
       - name: Validate Docker Compose
         if: ${{ steps.config.outputs.check_docker_compose == 'true' }}
@@ -124,18 +134,19 @@ jobs:
         run: uv run dbt deps
 
       - name: Run dbt parse
-        if: ${{ steps.config.outputs.check_dbt_parse == 'true' }}
+        if: ${{ steps.config.outputs.check_dbt_parse == 'true' && vars.DBT_PARSE_ENABLED == 'true' }}
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
           DBT_HOST: ${{ secrets.dbt_host }}
           DBT_USER: ${{ secrets.dbt_user }}
           DBT_PASSWORD: ${{ secrets.dbt_password }}
-          DBT_DATABASE: ${{ secrets.dbt_database }}
+          DBT_PORT: ${{ secrets.dbt_port }}
+          DBT_DBNAME: ${{ secrets.dbt_dbname }}
           DBT_SCHEMA: ${{ secrets.dbt_schema }}
           DBT_PROFILES_EXAMPLE: ${{ steps.config.outputs.dbt_profiles_example }}
         run: |
-          test -n "$DBT_HOST" && test -n "$DBT_USER" && test -n "$DBT_PASSWORD" && test -n "$DBT_DATABASE" && test -n "$DBT_SCHEMA" || {
-            echo "The dbt-parse capability requires dbt_host, dbt_user, dbt_password, dbt_database, and dbt_schema secrets." >&2
+          test -n "$DBT_HOST" && test -n "$DBT_USER" && test -n "$DBT_PASSWORD" || {
+            echo "The dbt-parse capability requires dbt_host, dbt_user, and dbt_password secrets when DBT_PARSE_ENABLED is true." >&2
             exit 1
           }
           cp "$DBT_PROFILES_EXAMPLE" profiles.yml
