@@ -6,10 +6,11 @@ implementation concerns, not workflow APIs. Consumers declare their required
 capabilities in `.github/release.toml` and should never reference implementation
 files in this repository.
 
-Consumers will eventually pin the public contract to a stable major version:
+Consumers pin the public contract to the stable major version:
 `SpencerRWood/workflows/.github/workflows/release.yml@v1`. Development happens
 on `main`; a future breaking public contract will be released as `v2`. Consumers
-must not use `@main` as their long-term contract. No `v1` tag exists yet.
+must not use `@main` as their long-term contract. The published `v1` tag is the
+current stable public contract.
 
 The canonical contract intentionally has no compatibility mode or repository
 name exceptions. Repositories must converge on the quality checks their own
