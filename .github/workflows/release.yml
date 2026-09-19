@@ -47,8 +47,11 @@ jobs:
       - name: Check out workflow implementation
         uses: actions/checkout@v6
         with:
+          # The public v1 contract always obtains its helpers from the same
+          # stable contract tag. `github.workflow_sha` is the caller's SHA in
+          # a reusable workflow, not this repository's workflow SHA.
           repository: SpencerRWood/workflows
-          ref: ${{ github.workflow_sha }}
+          ref: v1
           path: .workflow-contract
           persist-credentials: false
 
