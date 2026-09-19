@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "release_config.py"
+WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "release.yml"
 
 
 class ReleaseConfigTests(unittest.TestCase):
@@ -74,6 +75,30 @@ semantic_release = true
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("node_enabled=true", outputs)
         self.assertIn("node_check_typecheck=true", outputs)
+
+    def test_monorepo_python_project_directory_is_emitted(self) -> None:
+        result, outputs = self.run_config(
+            """version = 1
+[project]
+working_directory = "backend"
+[python]
+[validation]
+checks = ["mypy", "pytest", "pre-commit"]
+[release]
+semantic_release = true
+""",
+            ("backend/pyproject.toml", "backend/uv.lock"),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("working_directory=backend", outputs)
+
+    def test_pre_commit_resolves_from_configured_python_project(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            'uv run --directory "${{ steps.config.outputs.working_directory }}" pre-commit run --files',
+            workflow,
+        )
+        self.assertIn('git -C "$GITHUB_WORKSPACE" ls-files -z', workflow)
 
     def test_compose_capability_is_exposed(self) -> None:
         result, outputs = self.run_config(

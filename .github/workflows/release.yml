@@ -181,8 +181,7 @@ jobs:
         if: ${{ steps.config.outputs.check_pre_commit == 'true' }}
         env:
           SKIP: no-commit-to-branch
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: git -C "$GITHUB_WORKSPACE" ls-files -z | xargs -0 uv run --directory "$GITHUB_WORKSPACE" pre-commit run --files
+        run: git -C "$GITHUB_WORKSPACE" ls-files -z | xargs -0 uv run --directory "${{ steps.config.outputs.working_directory }}" pre-commit run --files
 
       - name: Run semantic-release
         working-directory: ${{ steps.config.outputs.working_directory }}
