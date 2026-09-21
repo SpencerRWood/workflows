@@ -178,15 +178,20 @@ jobs:
 
       - name: Run post-deploy health checks
         id: health
-        # `always()` prevents GitHub's implicit success guard from skipping this
-        # check when an earlier deployment step uses continue-on-error.
-        if: ${{ always() && steps.apply.outcome == 'success' }}
+        # Run the wrapper unconditionally; GitHub otherwise applies an implicit
+        # success guard around a continue-on-error deployment step.
+        if: ${{ always() }}
         continue-on-error: true
         env:
           SECRETS_FILE: ${{ inputs.secrets_file }}
           HEALTH_CHECK_COMMAND: ${{ inputs.health_check_command }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
         run: |
           set -euo pipefail
+          if [[ "$APPLY_OUTCOME" != success ]]; then
+            echo 'Health checks skipped because apply did not succeed.'
+            exit 0
+          fi
           if [[ -n "$SECRETS_FILE" ]]; then
             set -a
             # shellcheck disable=SC1090 # Caller supplies a protected runner-local path.
