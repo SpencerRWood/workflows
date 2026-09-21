@@ -12,6 +12,22 @@ on `main`; a future breaking public contract will be released as `v2`. Consumers
 must not use `@main` as their long-term contract. The published `v1` tag is the
 current stable public contract.
 
+`deploy-ansible.yml` is the complementary reusable deployment contract. A
+consumer calls it only after a GitHub Release is published, passes an immutable
+release tag, its inventory/playbook, a target-specific concurrency group, and a
+repository-local health command. It checks out that tag (never a moving branch),
+syncs locked tooling, parses and syntax-checks inventory/playbook, applies the
+canonical playbook, and runs health checks. A failed apply or health check restores
+the last successful GitHub Environment deployment ref once and checks it again.
+It restores repository-defined runtime configuration only, never a blind database
+rollback.
+
+Deployment runs only on a trusted self-hosted control-node runner. Secret values
+remain in runner-local protected files and are sourced only for Ansible; callers
+pass only their non-secret paths. Consumers must create the named GitHub
+Environment before first deployment so its deployment history provides the
+previous-successful rollback target.
+
 The canonical contract intentionally has no compatibility mode or repository
 name exceptions. Repositories must converge on the quality checks their own
 configuration declares. The five repositories currently undergoing substantial

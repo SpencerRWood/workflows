@@ -1,0 +1,237 @@
+name: Deploy Ansible release
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: Repository containing the release to deploy.
+        required: true
+        type: string
+      ref:
+        description: Immutable release tag to deploy.
+        required: true
+        type: string
+      inventory_path:
+        required: true
+        type: string
+      playbook_path:
+        required: true
+        type: string
+      ansible_tags:
+        required: false
+        type: string
+        default: ''
+      ansible_extra_vars:
+        description: Optional non-secret Ansible extra variables (for example a runner-local secret-file path).
+        required: false
+        type: string
+        default: ''
+      environment_name:
+        required: true
+        type: string
+      health_check_command:
+        required: true
+        type: string
+      deployment_working_directory:
+        required: false
+        type: string
+        default: '.'
+      rollback_ref:
+        description: Optional known-good tag. Empty discovers the prior successful environment deployment.
+        required: false
+        type: string
+        default: ''
+      concurrency_group:
+        required: true
+        type: string
+      runner:
+        description: Trusted runner label with Ansible, SSH access, and runner-local secrets.
+        required: false
+        type: string
+        default: self-hosted
+      secrets_file:
+        description: Optional protected runner-local environment file to source for Ansible.
+        required: false
+        type: string
+        default: ''
+      validation_command:
+        description: Optional repository-local validation command, run before Ansible check/apply.
+        required: false
+        type: string
+        default: ''
+      check_command:
+        description: Optional scoped Ansible check-mode command.
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: ${{ inputs.concurrency_group }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.ref }} to ${{ inputs.environment_name }}
+    runs-on: ${{ inputs.runner }}
+    environment: ${{ inputs.environment_name }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.deployment_working_directory }}
+    steps:
+      - name: Check out immutable release
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Verify release checkout
+        run: |
+          test "$(git describe --exact-match --tags HEAD)" = "${{ inputs.ref }}"
+          echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} start=$(date --iso-8601=seconds)"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Sync deployment tooling
+        run: uv sync --frozen --group dev
+
+      - name: Find previous successful release
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment_name }}
+          CURRENT_REF: ${{ inputs.ref }}
+          REQUESTED_ROLLBACK_REF: ${{ inputs.rollback_ref }}
+        run: |
+          if [[ -n "$REQUESTED_ROLLBACK_REF" ]]; then
+            echo "ref=$REQUESTED_ROLLBACK_REF" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          deployments=$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/deployments?environment=${DEPLOYMENT_ENVIRONMENT}&per_page=100")
+          previous_ref=''
+          while IFS= read -r deployment_id; do
+            status=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/deployments/${deployment_id}/statuses?per_page=1" | jq -r '.[0].state // empty')
+            ref=$(jq -r ".[] | select(.id == ${deployment_id}) | .ref" <<<"$deployments")
+            if [[ "$status" == success && "$ref" != "$CURRENT_REF" ]]; then
+              previous_ref="$ref"
+              break
+            fi
+          done < <(jq -r '.[].id' <<<"$deployments")
+          echo "ref=$previous_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release and target
+        env:
+          SECRETS_FILE: ${{ inputs.secrets_file }}
+          INVENTORY_PATH: ${{ inputs.inventory_path }}
+          PLAYBOOK_PATH: ${{ inputs.playbook_path }}
+          VALIDATION_COMMAND: ${{ inputs.validation_command }}
+          CHECK_COMMAND: ${{ inputs.check_command }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SECRETS_FILE" ]]; then
+            test -r "$SECRETS_FILE"
+            set -a
+            # shellcheck disable=SC1090 # Caller supplies a protected runner-local path.
+            source "$SECRETS_FILE"
+            set +a
+          fi
+          if [[ -n "$VALIDATION_COMMAND" ]]; then eval "$VALIDATION_COMMAND"; fi
+          ansible-inventory -i "$INVENTORY_PATH" --graph
+          ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" --syntax-check
+          if [[ -n "$CHECK_COMMAND" ]]; then eval "$CHECK_COMMAND"; fi
+
+      - name: Apply release configuration
+        id: apply
+        continue-on-error: true
+        env:
+          SECRETS_FILE: ${{ inputs.secrets_file }}
+          INVENTORY_PATH: ${{ inputs.inventory_path }}
+          PLAYBOOK_PATH: ${{ inputs.playbook_path }}
+          ANSIBLE_TAGS: ${{ inputs.ansible_tags }}
+          ANSIBLE_EXTRA_VARS: ${{ inputs.ansible_extra_vars }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SECRETS_FILE" ]]; then
+            set -a
+            # shellcheck disable=SC1090 # Caller supplies a protected runner-local path.
+            source "$SECRETS_FILE"
+            set +a
+          fi
+          args=()
+          if [[ -n "$ANSIBLE_TAGS" ]]; then args+=(--tags "$ANSIBLE_TAGS"); fi
+          if [[ -n "$ANSIBLE_EXTRA_VARS" ]]; then args+=(--extra-vars "$ANSIBLE_EXTRA_VARS"); fi
+          ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" "${args[@]}"
+
+      - name: Run post-deploy health checks
+        id: health
+        if: ${{ steps.apply.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          SECRETS_FILE: ${{ inputs.secrets_file }}
+          HEALTH_CHECK_COMMAND: ${{ inputs.health_check_command }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SECRETS_FILE" ]]; then
+            set -a
+            # shellcheck disable=SC1090 # Caller supplies a protected runner-local path.
+            source "$SECRETS_FILE"
+            set +a
+          fi
+          eval "$HEALTH_CHECK_COMMAND"
+
+      - name: Roll back previous successful release
+        id: rollback
+        if: ${{ (steps.apply.outcome == 'failure' || steps.health.outcome == 'failure') && steps.previous.outputs.ref != '' }}
+        continue-on-error: true
+        env:
+          PREVIOUS_REF: ${{ steps.previous.outputs.ref }}
+          SECRETS_FILE: ${{ inputs.secrets_file }}
+          INVENTORY_PATH: ${{ inputs.inventory_path }}
+          PLAYBOOK_PATH: ${{ inputs.playbook_path }}
+          ANSIBLE_TAGS: ${{ inputs.ansible_tags }}
+          ANSIBLE_EXTRA_VARS: ${{ inputs.ansible_extra_vars }}
+          HEALTH_CHECK_COMMAND: ${{ inputs.health_check_command }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PREVIOUS_REF"
+          if [[ -n "$SECRETS_FILE" ]]; then
+            set -a
+            # shellcheck disable=SC1090 # Caller supplies a protected runner-local path.
+            source "$SECRETS_FILE"
+            set +a
+          fi
+          args=()
+          if [[ -n "$ANSIBLE_TAGS" ]]; then args+=(--tags "$ANSIBLE_TAGS"); fi
+          if [[ -n "$ANSIBLE_EXTRA_VARS" ]]; then args+=(--extra-vars "$ANSIBLE_EXTRA_VARS"); fi
+          ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" "${args[@]}"
+          eval "$HEALTH_CHECK_COMMAND"
+          echo "Rolled back to $PREVIOUS_REF after failed deployment of ${{ inputs.ref }}."
+
+      - name: Report deployment result
+        if: ${{ always() }}
+        env:
+          APPLY: ${{ steps.apply.outcome }}
+          HEALTH: ${{ steps.health.outcome }}
+          ROLLBACK: ${{ steps.rollback.outcome }}
+        run: |
+          echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} end=$(date --iso-8601=seconds) apply=$APPLY health=$HEALTH rollback=${ROLLBACK:-not-needed}"
+          if [[ "$APPLY" != success || ( -n "$HEALTH" && "$HEALTH" != success ) ]]; then
+            if [[ -n "${{ steps.previous.outputs.ref }}" && "$ROLLBACK" != success ]]; then
+              echo 'Automatic rollback failed. Re-run the consumer deploy workflow manually with the prior release tag after investigating the target.' >&2
+            fi
+            exit 1
+          fi

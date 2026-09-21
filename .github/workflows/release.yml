@@ -2,6 +2,13 @@ name: Release
 
 on:
   workflow_call:
+    outputs:
+      released:
+        description: Whether semantic-release published a release during this run.
+        value: ${{ jobs.release.outputs.released }}
+      release_tag:
+        description: Immutable tag published by semantic-release, when one was created.
+        value: ${{ jobs.release.outputs.release_tag }}
     secrets:
       dbt_host:
         description: dbt connection host, required only for the dbt-parse capability.
@@ -33,6 +40,9 @@ jobs:
   release:
     name: Validate and release
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.semantic_release.outputs.released }}
+      release_tag: ${{ steps.semantic_release.outputs.release_tag }}
     permissions:
       contents: write
     steps:
@@ -178,7 +188,17 @@ jobs:
         run: git -C "$GITHUB_WORKSPACE" ls-files -z | xargs -0 uv run --directory "${{ steps.config.outputs.working_directory }}" pre-commit run --files
 
       - name: Run semantic-release
+        id: semantic_release
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: uv run semantic-release version --vcs-release
+        run: |
+          uv run semantic-release version --vcs-release
+          release_tag="$(git tag --points-at HEAD --sort=-v:refname | head -n 1)"
+          if [[ -n "$release_tag" ]]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo 'release_tag=' >> "$GITHUB_OUTPUT"
+          fi
