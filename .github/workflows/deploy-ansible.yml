@@ -93,7 +93,7 @@ jobs:
       - name: Verify release checkout
         run: |
           test "$(git describe --exact-match --tags HEAD)" = "${{ inputs.ref }}"
-          echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} start=$(date --iso-8601=seconds)"
+          echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} start=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v9.0.0
@@ -150,8 +150,8 @@ jobs:
             set +a
           fi
           if [[ -n "$VALIDATION_COMMAND" ]]; then eval "$VALIDATION_COMMAND"; fi
-          ansible-inventory -i "$INVENTORY_PATH" --graph
-          ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" --syntax-check
+          uv run ansible-inventory -i "$INVENTORY_PATH" --graph
+          uv run ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" --syntax-check
           if [[ -n "$CHECK_COMMAND" ]]; then eval "$CHECK_COMMAND"; fi
 
       - name: Apply release configuration
@@ -174,7 +174,7 @@ jobs:
           args=()
           if [[ -n "$ANSIBLE_TAGS" ]]; then args+=(--tags "$ANSIBLE_TAGS"); fi
           if [[ -n "$ANSIBLE_EXTRA_VARS" ]]; then args+=(--extra-vars "$ANSIBLE_EXTRA_VARS"); fi
-          ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" "${args[@]}"
+          uv run ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" "${args[@]}"
 
       - name: Run post-deploy health checks
         id: health
@@ -217,7 +217,7 @@ jobs:
           args=()
           if [[ -n "$ANSIBLE_TAGS" ]]; then args+=(--tags "$ANSIBLE_TAGS"); fi
           if [[ -n "$ANSIBLE_EXTRA_VARS" ]]; then args+=(--extra-vars "$ANSIBLE_EXTRA_VARS"); fi
-          ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" "${args[@]}"
+          uv run ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" "${args[@]}"
           eval "$HEALTH_CHECK_COMMAND"
           echo "Rolled back to $PREVIOUS_REF after failed deployment of ${{ inputs.ref }}."
 
@@ -228,7 +228,7 @@ jobs:
           HEALTH: ${{ steps.health.outcome }}
           ROLLBACK: ${{ steps.rollback.outcome }}
         run: |
-          echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} end=$(date --iso-8601=seconds) apply=$APPLY health=$HEALTH rollback=${ROLLBACK:-not-needed}"
+          echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} end=$(date -u '+%Y-%m-%dT%H:%M:%SZ') apply=$APPLY health=$HEALTH rollback=${ROLLBACK:-not-needed}"
           if [[ "$APPLY" != success || ( -n "$HEALTH" && "$HEALTH" != success ) ]]; then
             if [[ -n "${{ steps.previous.outputs.ref }}" && "$ROLLBACK" != success ]]; then
               echo 'Automatic rollback failed. Re-run the consumer deploy workflow manually with the prior release tag after investigating the target.' >&2
