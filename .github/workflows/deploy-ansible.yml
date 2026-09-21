@@ -178,7 +178,9 @@ jobs:
 
       - name: Run post-deploy health checks
         id: health
-        if: ${{ steps.apply.outcome == 'success' }}
+        # `always()` prevents GitHub's implicit success guard from skipping this
+        # check when an earlier deployment step uses continue-on-error.
+        if: ${{ always() && steps.apply.outcome == 'success' }}
         continue-on-error: true
         env:
           SECRETS_FILE: ${{ inputs.secrets_file }}
