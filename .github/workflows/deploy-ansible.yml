@@ -45,10 +45,10 @@ on:
         required: true
         type: string
       runner:
-        description: Trusted runner label with Ansible, SSH access, and runner-local secrets.
+        description: JSON array of trusted runner labels.
         required: false
         type: string
-        default: self-hosted
+        default: '["self-hosted"]'
       secrets_file:
         description: Optional protected runner-local environment file to source for Ansible.
         required: false
@@ -64,6 +64,26 @@ on:
         required: false
         type: string
         default: ''
+      privileged_deploy_command:
+        description: Optional narrowly scoped runner-local privileged deployment entrypoint.
+        required: false
+        type: string
+        default: ''
+      privileged_health_check_command:
+        description: Optional narrowly scoped runner-local privileged health entrypoint.
+        required: false
+        type: string
+        default: ''
+      privileged_check_command:
+        description: Optional narrowly scoped runner-local Ansible check-mode entrypoint.
+        required: false
+        type: string
+        default: ''
+      deployment_state_file:
+        description: Durable runner-local JSON metadata path for this isolated deployment target.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -76,7 +96,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy ${{ inputs.ref }} to ${{ inputs.environment_name }}
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ fromJSON(inputs.runner) }}
     environment: ${{ inputs.environment_name }}
     defaults:
       run:
@@ -111,6 +131,13 @@ jobs:
           CURRENT_REF: ${{ inputs.ref }}
           REQUESTED_ROLLBACK_REF: ${{ inputs.rollback_ref }}
         run: |
+          if [[ -n "${{ inputs.deployment_state_file }}" && -r "${{ inputs.deployment_state_file }}" ]]; then
+            previous_ref=$(jq -r '.current_release // empty' "${{ inputs.deployment_state_file }}")
+            if [[ -n "$previous_ref" && "$previous_ref" != "$CURRENT_REF" ]]; then
+              echo "ref=$previous_ref" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           if [[ -n "$REQUESTED_ROLLBACK_REF" ]]; then
             echo "ref=$REQUESTED_ROLLBACK_REF" >> "$GITHUB_OUTPUT"
             exit 0
@@ -140,6 +167,7 @@ jobs:
           PLAYBOOK_PATH: ${{ inputs.playbook_path }}
           VALIDATION_COMMAND: ${{ inputs.validation_command }}
           CHECK_COMMAND: ${{ inputs.check_command }}
+          PRIVILEGED_CHECK_COMMAND: ${{ inputs.privileged_check_command }}
         run: |
           set -euo pipefail
           if [[ -n "$SECRETS_FILE" ]]; then
@@ -152,7 +180,12 @@ jobs:
           if [[ -n "$VALIDATION_COMMAND" ]]; then eval "$VALIDATION_COMMAND"; fi
           uv run ansible-inventory -i "$INVENTORY_PATH" --graph
           uv run ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" --syntax-check
-          if [[ -n "$CHECK_COMMAND" ]]; then eval "$CHECK_COMMAND"; fi
+          uv run ansible-lint "$PLAYBOOK_PATH"
+          if [[ -n "$PRIVILEGED_CHECK_COMMAND" ]]; then
+            eval "$PRIVILEGED_CHECK_COMMAND"
+          elif [[ -n "$CHECK_COMMAND" ]]; then
+            eval "$CHECK_COMMAND"
+          fi
 
       - name: Apply release configuration
         id: apply
@@ -163,6 +196,7 @@ jobs:
           PLAYBOOK_PATH: ${{ inputs.playbook_path }}
           ANSIBLE_TAGS: ${{ inputs.ansible_tags }}
           ANSIBLE_EXTRA_VARS: ${{ inputs.ansible_extra_vars }}
+          PRIVILEGED_DEPLOY_COMMAND: ${{ inputs.privileged_deploy_command }}
         run: |
           set -euo pipefail
           if [[ -n "$SECRETS_FILE" ]]; then
@@ -170,6 +204,10 @@ jobs:
             # shellcheck disable=SC1090 # Caller supplies a protected runner-local path.
             source "$SECRETS_FILE"
             set +a
+          fi
+          if [[ -n "$PRIVILEGED_DEPLOY_COMMAND" ]]; then
+            eval "$PRIVILEGED_DEPLOY_COMMAND"
+            exit 0
           fi
           args=()
           if [[ -n "$ANSIBLE_TAGS" ]]; then args+=(--tags "$ANSIBLE_TAGS"); fi
@@ -185,6 +223,7 @@ jobs:
         env:
           SECRETS_FILE: ${{ inputs.secrets_file }}
           HEALTH_CHECK_COMMAND: ${{ inputs.health_check_command }}
+          PRIVILEGED_HEALTH_CHECK_COMMAND: ${{ inputs.privileged_health_check_command }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
         run: |
           set -euo pipefail
@@ -198,7 +237,11 @@ jobs:
             source "$SECRETS_FILE"
             set +a
           fi
-          eval "$HEALTH_CHECK_COMMAND"
+          if [[ -n "$PRIVILEGED_HEALTH_CHECK_COMMAND" ]]; then
+            eval "$PRIVILEGED_HEALTH_CHECK_COMMAND"
+          else
+            eval "$HEALTH_CHECK_COMMAND"
+          fi
 
       - name: Roll back previous successful release
         id: rollback
@@ -212,6 +255,8 @@ jobs:
           ANSIBLE_TAGS: ${{ inputs.ansible_tags }}
           ANSIBLE_EXTRA_VARS: ${{ inputs.ansible_extra_vars }}
           HEALTH_CHECK_COMMAND: ${{ inputs.health_check_command }}
+          PRIVILEGED_DEPLOY_COMMAND: ${{ inputs.privileged_deploy_command }}
+          PRIVILEGED_HEALTH_CHECK_COMMAND: ${{ inputs.privileged_health_check_command }}
         run: |
           set -euo pipefail
           git checkout --detach "$PREVIOUS_REF"
@@ -221,12 +266,55 @@ jobs:
             source "$SECRETS_FILE"
             set +a
           fi
-          args=()
+          if [[ -n "$PRIVILEGED_DEPLOY_COMMAND" ]]; then
+            eval "$PRIVILEGED_DEPLOY_COMMAND"
+          else
+            args=()
           if [[ -n "$ANSIBLE_TAGS" ]]; then args+=(--tags "$ANSIBLE_TAGS"); fi
           if [[ -n "$ANSIBLE_EXTRA_VARS" ]]; then args+=(--extra-vars "$ANSIBLE_EXTRA_VARS"); fi
           uv run ansible-playbook -i "$INVENTORY_PATH" "$PLAYBOOK_PATH" "${args[@]}"
-          eval "$HEALTH_CHECK_COMMAND"
+          fi
+          if [[ -n "$PRIVILEGED_HEALTH_CHECK_COMMAND" ]]; then eval "$PRIVILEGED_HEALTH_CHECK_COMMAND"; else eval "$HEALTH_CHECK_COMMAND"; fi
           echo "Rolled back to $PREVIOUS_REF after failed deployment of ${{ inputs.ref }}."
+
+      - name: Record durable deployment metadata
+        if: ${{ always() && inputs.deployment_state_file != '' }}
+        env:
+          STATE_FILE: ${{ inputs.deployment_state_file }}
+          RELEASE: ${{ inputs.ref }}
+          TARGET: ${{ inputs.environment_name }}
+          APPLY: ${{ steps.apply.outcome }}
+          HEALTH: ${{ steps.health.outcome }}
+          ROLLBACK: ${{ steps.rollback.outcome }}
+          PREVIOUS: ${{ steps.previous.outputs.ref }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          path = os.environ['STATE_FILE']
+          try:
+              with open(path) as stream:
+                  state = json.load(stream)
+          except (FileNotFoundError, json.JSONDecodeError):
+              state = {}
+          success = os.environ['APPLY'] == 'success' and os.environ['HEALTH'] == 'success'
+          if success:
+              state['previous_successful_release'] = state.get('current_release')
+              state['current_release'] = os.environ['RELEASE']
+          state.update({
+              'deployment_target': os.environ['TARGET'],
+              'timestamp': datetime.now(timezone.utc).isoformat(),
+              'last_attempt_release': os.environ['RELEASE'],
+              'last_attempt_state': 'success' if success else 'failure',
+              'rollback_release': os.environ['PREVIOUS'] or None,
+              'rollback_state': os.environ['ROLLBACK'] or 'not-needed',
+          })
+          temporary = path + '.tmp'
+          with open(temporary, 'w') as stream:
+              json.dump(state, stream, sort_keys=True)
+              stream.write('\n')
+          os.replace(temporary, path)
+          PY
 
       - name: Report deployment result
         if: ${{ always() }}
