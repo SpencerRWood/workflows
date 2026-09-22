@@ -54,7 +54,13 @@ jobs:
       - name: Check out workflow implementation
         # Keep helper code outside the consumer checkout so repository tools
         # cannot scan it as application code.
-        run: git clone --depth 1 --branch v1 https://github.com/SpencerRWood/workflows.git "$RUNNER_TEMP/workflow-contract"
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          git init "$RUNNER_TEMP/workflow-contract"
+          git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
+          git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
 
       - name: Set up configuration Python
         uses: actions/setup-python@v6
@@ -193,7 +199,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          uv run semantic-release version --vcs-release
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
+          uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release
           release_tag="$(git tag --points-at HEAD --sort=-v:refname | head -n 1)"
           if [[ -n "$release_tag" ]]; then
             echo "released=true" >> "$GITHUB_OUTPUT"
