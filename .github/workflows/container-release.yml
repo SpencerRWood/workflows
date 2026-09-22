@@ -1,0 +1,167 @@
+name: Publish release container
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Published semantic release tag (for example v1.2.3).
+        required: true
+        type: string
+      image_name:
+        description: Image name under the caller's GHCR owner; defaults to the repository name.
+        required: false
+        type: string
+        default: ''
+      dockerfile:
+        description: Dockerfile path relative to the repository root.
+        required: false
+        type: string
+        default: Dockerfile
+      context:
+        description: Build context path relative to the repository root.
+        required: false
+        type: string
+        default: .
+      build_args:
+        description: Optional newline-separated Docker build arguments.
+        required: false
+        type: string
+        default: ''
+      target:
+        description: Optional Dockerfile target stage.
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: Comma-separated Docker platforms.
+        required: false
+        type: string
+        default: linux/amd64
+    outputs:
+      image_repository:
+        description: Normalized GHCR image repository.
+        value: ${{ jobs.publish.outputs.image_repository }}
+      version_image:
+        description: Semantic version tag reference.
+        value: ${{ jobs.publish.outputs.version_image }}
+      sha_image:
+        description: Full commit SHA tag reference.
+        value: ${{ jobs.publish.outputs.sha_image }}
+      image_digest:
+        description: Digest of the pushed image or manifest index.
+        value: ${{ jobs.publish.outputs.image_digest }}
+      version_image_digest:
+        description: Digest-qualified semantic version reference for deployment.
+        value: ${{ jobs.publish.outputs.version_image_digest }}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: container-release-${{ github.repository }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.release_tag }}
+    runs-on: ubuntu-latest
+    outputs:
+      image_repository: ${{ steps.prepare.outputs.image_repository }}
+      version_image: ${{ steps.prepare.outputs.version_image }}
+      sha_image: ${{ steps.prepare.outputs.sha_image }}
+      image_digest: ${{ steps.build.outputs.digest }}
+      version_image_digest: ${{ steps.prepare.outputs.version_image }}@${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out workflow implementation
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          git init "$RUNNER_TEMP/workflow-contract"
+          git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
+          git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
+
+      - name: Validate published release and build configuration
+        id: prepare
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          BUILD_CONTEXT: ${{ inputs.context }}
+          PLATFORMS: ${{ inputs.platforms }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/container_release.py"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Refuse to overwrite published release tags
+        env:
+          VERSION_IMAGE: ${{ steps.prepare.outputs.version_image }}
+          SHA_IMAGE: ${{ steps.prepare.outputs.sha_image }}
+        run: |
+          set -euo pipefail
+          for image in "$VERSION_IMAGE" "$SHA_IMAGE"; do
+            if response=$(docker buildx imagetools inspect "$image" 2>&1); then
+              echo "Refusing to overwrite existing GHCR tag: $image" >&2
+              exit 1
+            fi
+            if [[ "$response" != *'not found'* && "$response" != *'manifest unknown'* ]]; then
+              echo "Could not verify whether GHCR tag is available: $image" >&2
+              echo "$response" >&2
+              exit 1
+            fi
+          done
+
+      - name: Generate image tags and labels
+        id: metadata
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ${{ steps.prepare.outputs.image_repository }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.prepare.outputs.release_tag }}
+            type=raw,value=sha-${{ steps.prepare.outputs.commit_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.prepare.outputs.commit_sha }}
+            org.opencontainers.image.version=${{ steps.prepare.outputs.release_tag }}
+
+      - name: Build and publish release image
+        id: build
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          platforms: ${{ inputs.platforms }}
+          build-args: ${{ inputs.build_args }}
+          target: ${{ inputs.target }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=${{ github.repository }}-container
+          cache-to: type=gha,mode=max,scope=${{ github.repository }}-container
+
+      - name: Verify pushed digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo 'Docker build did not return a usable sha256 digest.' >&2
+            exit 1
+          }

@@ -28,6 +28,78 @@ pass only their non-secret paths. Consumers must create the named GitHub
 Environment before first deployment so its deployment history provides the
 previous-successful rollback target.
 
+## Container publishing
+
+`container-release.yml` is the reusable GHCR publishing contract for application
+repositories. Call it after `release.yml` reports `released == 'true'`, passing
+the `release_tag` output. It checks out that tag in the caller repository,
+verifies the checkout matches the tag and a published, stable GitHub Release,
+then builds and pushes the image. A branch commit or draft release cannot be
+published through this workflow. Stable `vMAJOR.MINOR.PATCH` tags are supported.
+
+The caller must grant `contents: write` to the release job and `contents: read`
+plus `packages: write` to the container job. The container job uses its automatic
+`GITHUB_TOKEN` to read the release and publish to GHCR. No PAT is needed when the
+calling repository and package permit GitHub Actions package access. The image
+owner comes from the caller's repository owner and is lowercased for GHCR.
+
+| Input | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `release_tag` | yes | — | Published stable semantic release tag, such as `v1.2.3`. |
+| `image_name` | no | Caller repository name | Single image name under the caller's GHCR owner. |
+| `dockerfile` | no | `Dockerfile` | Repository-relative Dockerfile path. |
+| `context` | no | `.` | Repository-relative build context. |
+| `build_args` | no | empty | Newline-separated, non-secret Docker build arguments. |
+| `target` | no | empty | Optional Dockerfile target stage. |
+| `platforms` | no | `linux/amd64` | Comma-separated Docker platforms; the default targets Beelink. |
+
+| Output | Example | Meaning |
+| --- | --- | --- |
+| `image_repository` | `ghcr.io/spencerrwood/website-portfolio` | Normalized image path. |
+| `version_image` | `ghcr.io/spencerrwood/website-portfolio:v1.2.3` | Semantic version tag. |
+| `sha_image` | `ghcr.io/spencerrwood/website-portfolio:sha-<full commit SHA>` | Commit tag. |
+| `image_digest` | `sha256:...` | Pushed image or manifest-index digest. |
+| `version_image_digest` | `ghcr.io/spencerrwood/website-portfolio:v1.2.3@sha256:...` | Deployable, digest-qualified reference. |
+
+For example, a consumer may extend its release wrapper:
+
+```yaml
+name: Release and publish container
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    uses: SpencerRWood/workflows/.github/workflows/release.yml@v1
+    permissions:
+      contents: write
+
+  container:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    uses: SpencerRWood/workflows/.github/workflows/container-release.yml@v1
+    permissions:
+      contents: read
+      packages: write
+    with:
+      release_tag: ${{ needs.release.outputs.release_tag }}
+```
+
+The flow is `semantic release` → `released=true` and `release_tag=v1.2.3` →
+`container-release.yml` → `ghcr.io/<owner>/<repository>:v1.2.3` → a future
+infrastructure deployment. The workflow also pushes a full commit SHA tag and
+provides `version_image_digest` for downstream deployment. Deployment should
+use that digest-qualified reference, never a moving `latest` tag. Both image
+tags are release identifiers; the workflow refuses to overwrite existing tags.
+GHCR permits tag reassignment by other users with package write access, so the
+digest is the immutable artifact identity.
+
+Buildx uses BuildKit and GitHub Actions cache. OCI labels record the source
+repository, release commit, and version. A normal PR validation run never
+calls this workflow or publishes an image.
+
 The canonical contract intentionally has no compatibility mode or repository
 name exceptions. Repositories must converge on the quality checks their own
 configuration declares. The five repositories currently undergoing substantial
