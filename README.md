@@ -36,6 +36,9 @@ the `release_tag` output. It checks out that tag in the caller repository,
 verifies the checkout matches the tag and a published, stable GitHub Release,
 then builds and pushes the image. A branch commit or draft release cannot be
 published through this workflow. Stable `vMAJOR.MINOR.PATCH` tags are supported.
+The container contract was added in `v1.1.0`; the earlier `v1` tag does not
+contain this workflow. Pin container callers to `v1.1.0` or a later immutable
+release tag.
 
 The caller must grant `contents: write` to the release job and `contents: read`
 plus `packages: write` to the container job. The container job uses its automatic
@@ -79,7 +82,7 @@ jobs:
   container:
     needs: release
     if: needs.release.outputs.released == 'true'
-    uses: SpencerRWood/workflows/.github/workflows/container-release.yml@v1
+    uses: SpencerRWood/workflows/.github/workflows/container-release.yml@v1.1.0
     permissions:
       contents: read
       packages: write
