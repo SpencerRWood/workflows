@@ -87,6 +87,12 @@ table enables npm validation; its `checks` may contain `lint`, `typecheck`,
 unsafe paths, missing lockfiles, and incomplete capability combinations before
 dependency installation.
 
+The shared release parser keeps Conventional Commit semantics: `feat` creates a
+minor release, `fix` creates a patch release, and `chore(deps)` creates a patch
+release. Other `chore` commits and `docs` commits do not create releases. The
+workflow applies this rule to each consumer's existing semantic-release config
+at runtime, preserving its version, tag, and publishing settings.
+
 ### Python package or CLI
 
 ```toml
@@ -170,11 +176,13 @@ semantic_release = true
 ## Implementation
 
 The public workflow checks out the consumer repository with full history and
-clones its own helper implementation into the runner's temporary directory,
+checks out its own helper implementation at the called workflow's commit into
+the runner's temporary directory,
 outside the consumer checkout. It then loads the consumer configuration using
 `scripts/release_config.py`, installs locked
 dependencies, runs only the declared capabilities, and invokes
 `semantic-release version --vcs-release` only after every selected check passes.
 It has no public workflow inputs. It uses the automatic `GITHUB_TOKEN` for
-semantic-release and exposes no outputs or artifacts. Container publishing, deployment, and
-infrastructure provisioning remain outside this repository's current scope.
+semantic-release and exposes `released` and `release_tag` outputs to gate the
+consumer's existing deployment job. Container publishing and infrastructure
+provisioning are outside this release contract.
