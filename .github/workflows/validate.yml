@@ -2,6 +2,17 @@ name: Validate
 
 on:
   workflow_call:
+    inputs:
+      publish_commit_status:
+        description: Mirror PR validation into a commit status for cross-repository consumers.
+        required: false
+        type: boolean
+        default: false
+      status_context:
+        description: Commit status context used when publishing is enabled.
+        required: false
+        type: string
+        default: validation
     secrets:
       dbt_host:
         description: dbt connection host, required only for the dbt-parse capability.
@@ -24,17 +35,13 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   validation:
     name: validation
     runs-on: ubuntu-latest
     steps:
-      - name: Check out consumer repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
       - name: Check out workflow implementation
         # Keep helper code outside the consumer checkout so repository tools
         # cannot scan it as application code.
@@ -46,6 +53,19 @@ jobs:
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
           git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
           git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
+
+      - name: Publish pending validation status
+        if: ${{ inputs.publish_commit_status }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_CONTEXT: ${{ inputs.status_context }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/validation_status.py" pending
+
+      - name: Check out consumer repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up configuration Python
         uses: actions/setup-python@v6
@@ -177,3 +197,12 @@ jobs:
         env:
           SKIP: no-commit-to-branch
         run: git -C "$GITHUB_WORKSPACE" ls-files -z | xargs -0 uv run --directory "${{ steps.config.outputs.working_directory }}" pre-commit run --files
+
+      - name: Publish final validation status
+        if: ${{ always() && inputs.publish_commit_status }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_CONTEXT: ${{ inputs.status_context }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VALIDATION_JOB_STATUS: ${{ job.status }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/validation_status.py" final
