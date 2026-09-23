@@ -11,6 +11,8 @@ Consumers pin the public contract to the stable major version:
 on `main`; a future breaking public contract will be released as `v2`. Consumers
 must not use `@main` as their long-term contract. The published `v1` tag is the
 current stable public contract.
+The [main branch protection checklist](docs/branch-rules.md) records the
+required validation checks and outstanding GitHub administration steps.
 
 `deploy-ansible.yml` is the complementary reusable deployment contract. A
 consumer calls it only after a GitHub Release is published, passes an immutable
