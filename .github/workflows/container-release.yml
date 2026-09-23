@@ -82,7 +82,7 @@ jobs:
 
       - name: Check out workflow implementation
         env:
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           git init "$RUNNER_TEMP/workflow-contract"
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
