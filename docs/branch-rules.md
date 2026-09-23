@@ -1,28 +1,30 @@
-# Main branch protection checklist
+# Main branch protection
 
-The four repositories were unprotected on 2026-09-23. GitHub's private-repository
-branch protection and ruleset APIs returned HTTP 403 with an upgrade message.
-An administrator must enable these rules when the account plan supports private
-repository protection. Do not bypass validation to enable auto-merge.
+After the GitHub Pro upgrade on 2026-09-23, all four repositories have active
+rulesets targeting `refs/heads/main`. Each requires a pull request and a passing
+GitHub Actions validation check, and blocks force pushes and branch deletion.
+No actor can bypass these rules.
 
-| Repository | Required PR check | Additional review rule |
+| Repository | Active ruleset | Required PR check |
 | --- | --- | --- |
-| `SpencerRWood/workflows` | `validation` | Require one approving reviewer; changes affect all consumers. |
-| `SpencerRWood/infrastructure` | `validation / validation` | Keep normal review policy compatible with approved Renovate auto-merge. |
-| `SpencerRWood/homelab` | `validation / validation` | Keep normal review policy compatible with approved Renovate auto-merge. |
-| `SpencerRWood/portfolio-website` | `validation / validation` | Normal application review policy. |
+| `SpencerRWood/workflows` | [23876698](https://github.com/SpencerRWood/workflows/rules/23876698) | `validation` |
+| `SpencerRWood/infrastructure` | [23876717](https://github.com/SpencerRWood/infrastructure/rules/23876717) | `validation / validation` |
+| `SpencerRWood/homelab` | [23876719](https://github.com/SpencerRWood/homelab/rules/23876719) | `validation / validation` |
+| `SpencerRWood/portfolio-website` | [23876720](https://github.com/SpencerRWood/portfolio-website/rules/23876720) | `validation / validation` |
 
-For each `main` branch, require a pull request before merging, require the listed
-status check to pass, block force pushes, and block deletion. Select the GitHub
-Actions check as the required source when GitHub offers that choice. For
-`workflows`, require at least one approving review. Do not add a bypass actor
-for the release or deployment workflows.
+The required checks are restricted to the GitHub Actions app. `workflows`
+requires the PR head to be current with `main`; the other three require passing
+validation on the PR head without that extra rebase requirement. The rulesets
+require zero approving reviews because `SpencerRWood` is currently the only
+eligible collaborator on `workflows`; requiring another approval would block
+every workflow change. Add an eligible reviewer and then require one approval
+for `workflows` as a separate administration change.
 
 Infrastructure and homelab use Renovate platform auto-merge for their approved
-dependency classes. Configure GitHub to require the validation check before
-allowing their auto-merge. The homelab policy currently includes Docker minor
+dependency classes. Their required validation checks must pass before
+auto-merge. The homelab policy currently includes Docker minor
 and major updates; that policy was retained for this tranche and deserves a
 separate owner decision. PostgreSQL compatibility-major updates remain attended.
 
-The application image promotion PR remains review-gated. A future decision to
-auto-merge only that PR type needs its own explicit policy and permissions.
+The application image promotion PR requires a manual merge. A future decision
+to auto-merge only that PR type needs its own explicit policy and permissions.
