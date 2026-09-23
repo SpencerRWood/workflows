@@ -37,8 +37,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validation:
+    uses: SpencerRWood/workflows/.github/workflows/validate.yml@v1
+    secrets:
+      dbt_host: ${{ secrets.dbt_host }}
+      dbt_user: ${{ secrets.dbt_user }}
+      dbt_password: ${{ secrets.dbt_password }}
+      dbt_port: ${{ secrets.dbt_port }}
+      dbt_dbname: ${{ secrets.dbt_dbname }}
+      dbt_schema: ${{ secrets.dbt_schema }}
+
   release:
-    name: Validate and release
+    name: Release after validation
+    needs: validation
     runs-on: ubuntu-latest
     outputs:
       released: ${{ steps.semantic_release.outputs.released }}
@@ -84,114 +95,9 @@ jobs:
             ${{ steps.config.outputs.working_directory }}/pyproject.toml
             ${{ steps.config.outputs.working_directory }}/uv.lock
 
-      - name: Set up Node
-        if: ${{ steps.config.outputs.node_enabled == 'true' }}
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ steps.config.outputs.node_version }}
-          cache: npm
-          cache-dependency-path: ${{ steps.config.outputs.node_directory }}/package-lock.json
-
       - name: Sync Python dependencies
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
-
-      - name: Install Node dependencies
-        if: ${{ steps.config.outputs.node_enabled == 'true' }}
-        working-directory: ${{ steps.config.outputs.node_directory }}
-        run: npm ci
-
-      - name: Run Ruff lint
-        if: ${{ steps.config.outputs.check_ruff == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: uv run ruff check .
-
-      - name: Run Ruff format check
-        if: ${{ steps.config.outputs.check_ruff_format == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: uv run ruff format --check .
-
-      - name: Run mypy
-        if: ${{ steps.config.outputs.check_mypy == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: uv run mypy
-
-      - name: Run pytest
-        if: ${{ steps.config.outputs.check_pytest == 'true' && steps.config.outputs.check_pytest_coverage != 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: uv run pytest
-
-      - name: Run pytest with coverage
-        if: ${{ steps.config.outputs.check_pytest_coverage == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        env:
-          PYTEST_COVERAGE_TARGET: ${{ steps.config.outputs.coverage_target }}
-        run: uv run pytest --cov="$PYTEST_COVERAGE_TARGET" --cov-report=term-missing
-
-      - name: Validate Docker Compose
-        if: ${{ steps.config.outputs.check_docker_compose == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: docker compose config
-
-      - name: Run SQLFluff
-        if: ${{ steps.config.outputs.check_sqlfluff == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: uv run sqlfluff lint . --templater jinja
-
-      - name: Run dbt dependencies
-        if: ${{ steps.config.outputs.check_dbt_deps == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: uv run dbt deps
-
-      - name: Run dbt parse
-        if: ${{ steps.config.outputs.check_dbt_parse == 'true' && vars.DBT_PARSE_ENABLED == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        env:
-          DBT_HOST: ${{ secrets.dbt_host }}
-          DBT_USER: ${{ secrets.dbt_user }}
-          DBT_PASSWORD: ${{ secrets.dbt_password }}
-          DBT_PORT: ${{ secrets.dbt_port }}
-          DBT_DBNAME: ${{ secrets.dbt_dbname }}
-          DBT_SCHEMA: ${{ secrets.dbt_schema }}
-          DBT_PROFILES_EXAMPLE: ${{ steps.config.outputs.dbt_profiles_example }}
-        run: |
-          test -n "$DBT_HOST" && test -n "$DBT_USER" && test -n "$DBT_PASSWORD" || {
-            echo "The dbt-parse capability requires dbt_host, dbt_user, and dbt_password secrets when DBT_PARSE_ENABLED is true." >&2
-            exit 1
-          }
-          cp "$DBT_PROFILES_EXAMPLE" profiles.yml
-          uv run dbt parse --profiles-dir . --no-version-check
-
-      - name: Run Node lint
-        if: ${{ steps.config.outputs.node_check_lint == 'true' }}
-        working-directory: ${{ steps.config.outputs.node_directory }}
-        run: npm run lint
-
-      - name: Run Node typecheck
-        if: ${{ steps.config.outputs.node_check_typecheck == 'true' }}
-        working-directory: ${{ steps.config.outputs.node_directory }}
-        run: npm run typecheck
-
-      - name: Run Node tests
-        if: ${{ steps.config.outputs.node_check_test == 'true' }}
-        working-directory: ${{ steps.config.outputs.node_directory }}
-        run: npm test -- --run
-
-      - name: Build Node application
-        if: ${{ steps.config.outputs.node_check_build == 'true' }}
-        working-directory: ${{ steps.config.outputs.node_directory }}
-        run: npm run build
-
-      - name: Build Python package
-        if: ${{ steps.config.outputs.build_python_package == 'true' }}
-        working-directory: ${{ steps.config.outputs.working_directory }}
-        run: uv build
-
-      - name: Run pre-commit
-        if: ${{ steps.config.outputs.check_pre_commit == 'true' }}
-        env:
-          SKIP: no-commit-to-branch
-        run: git -C "$GITHUB_WORKSPACE" ls-files -z | xargs -0 uv run --directory "${{ steps.config.outputs.working_directory }}" pre-commit run --files
 
       - name: Run semantic-release
         id: semantic_release
@@ -199,10 +105,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git tag --list > "$RUNNER_TEMP/tags-before-release"
           python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
           uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release
           release_tag="$(git tag --points-at HEAD --sort=-v:refname | head -n 1)"
-          if [[ -n "$release_tag" ]]; then
+          if [[ -n "$release_tag" ]] && ! grep -Fxq "$release_tag" "$RUNNER_TEMP/tags-before-release"; then
             echo "released=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           else

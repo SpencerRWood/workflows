@@ -1,7 +1,7 @@
 # Centralized GitHub Actions Workflows
 
-`release.yml` is the single stable public reusable release contract for Wood
-repositories. It is called with `workflow_call`; project archetypes are internal
+`release.yml` and `validate.yml` are the stable reusable release and PR
+validation contracts for Wood repositories. They are called with `workflow_call`; project archetypes are internal
 implementation concerns, not workflow APIs. Consumers declare their required
 capabilities in `.github/release.toml` and should never reference implementation
 files in this repository.
@@ -36,9 +36,10 @@ the `release_tag` output. It checks out that tag in the caller repository,
 verifies the checkout matches the tag and a published, stable GitHub Release,
 then builds and pushes the image. A branch commit or draft release cannot be
 published through this workflow. Stable `vMAJOR.MINOR.PATCH` tags are supported.
-The container contract was added in `v1.1.0`; the earlier `v1` tag does not
-contain this workflow. Pin container callers to `v1.1.0` or a later immutable
-release tag.
+The `v1` major tag is updated only after a backwards-compatible contract
+release. Consumers call `release.yml@v1`, `validate.yml@v1`,
+`container-release.yml@v1`, and `deploy-ansible.yml@v1`. The immutable
+`v1.1.0` tag remains available for consumers that need that exact revision.
 
 The caller must grant `contents: write` to the release job and `contents: read`
 plus `packages: write` to the container job. The container job uses its automatic
@@ -82,7 +83,7 @@ jobs:
   container:
     needs: release
     if: needs.release.outputs.released == 'true'
-    uses: SpencerRWood/workflows/.github/workflows/container-release.yml@v1.1.0
+    uses: SpencerRWood/workflows/.github/workflows/container-release.yml@v1
     permissions:
       contents: read
       packages: write
@@ -250,13 +251,14 @@ semantic_release = true
 
 ## Implementation
 
-The public workflow checks out the consumer repository with full history and
+The validation workflow checks out the consumer repository and
 checks out its own helper implementation at the called workflow's commit into
 the runner's temporary directory,
 outside the consumer checkout. It then loads the consumer configuration using
 `scripts/release_config.py`, installs locked
-dependencies, runs only the declared capabilities, and invokes
-`semantic-release version --vcs-release` only after every selected check passes.
+dependencies, and runs only the declared capabilities. The release workflow
+calls that same validation contract before invoking
+`semantic-release version --vcs-release`.
 It has no public workflow inputs. It uses the automatic `GITHUB_TOKEN` for
 semantic-release and exposes `released` and `release_tag` outputs to gate the
 consumer's existing deployment job. Container publishing and infrastructure

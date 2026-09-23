@@ -1,0 +1,179 @@
+name: Validate
+
+on:
+  workflow_call:
+    secrets:
+      dbt_host:
+        description: dbt connection host, required only for the dbt-parse capability.
+        required: false
+      dbt_user:
+        description: dbt connection user, required only for the dbt-parse capability.
+        required: false
+      dbt_password:
+        description: dbt connection password, required only for the dbt-parse capability.
+        required: false
+      dbt_port:
+        description: Optional dbt connection port for the dbt-parse capability.
+        required: false
+      dbt_dbname:
+        description: Optional dbt database name for the dbt-parse capability.
+        required: false
+      dbt_schema:
+        description: Optional dbt schema for the dbt-parse capability.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    name: validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out consumer repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check out workflow implementation
+        # Keep helper code outside the consumer checkout so repository tools
+        # cannot scan it as application code.
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          git init "$RUNNER_TEMP/workflow-contract"
+          git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
+          git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
+
+      - name: Set up configuration Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Load release configuration
+        id: config
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ steps.config.outputs.python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            ${{ steps.config.outputs.working_directory }}/pyproject.toml
+            ${{ steps.config.outputs.working_directory }}/uv.lock
+
+      - name: Set up Node
+        if: ${{ steps.config.outputs.node_enabled == 'true' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ steps.config.outputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ steps.config.outputs.node_directory }}/package-lock.json
+
+      - name: Sync Python dependencies
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
+
+      - name: Install Node dependencies
+        if: ${{ steps.config.outputs.node_enabled == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm ci
+
+      - name: Run Ruff lint
+        if: ${{ steps.config.outputs.check_ruff == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run ruff check .
+
+      - name: Run Ruff format check
+        if: ${{ steps.config.outputs.check_ruff_format == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run ruff format --check .
+
+      - name: Run mypy
+        if: ${{ steps.config.outputs.check_mypy == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run mypy
+
+      - name: Run pytest
+        if: ${{ steps.config.outputs.check_pytest == 'true' && steps.config.outputs.check_pytest_coverage != 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run pytest
+
+      - name: Run pytest with coverage
+        if: ${{ steps.config.outputs.check_pytest_coverage == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          PYTEST_COVERAGE_TARGET: ${{ steps.config.outputs.coverage_target }}
+        run: uv run pytest --cov="$PYTEST_COVERAGE_TARGET" --cov-report=term-missing
+
+      - name: Validate Docker Compose
+        if: ${{ steps.config.outputs.check_docker_compose == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: docker compose config
+
+      - name: Run SQLFluff
+        if: ${{ steps.config.outputs.check_sqlfluff == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run sqlfluff lint . --templater jinja
+
+      - name: Run dbt dependencies
+        if: ${{ steps.config.outputs.check_dbt_deps == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv run dbt deps
+
+      - name: Run dbt parse
+        if: ${{ steps.config.outputs.check_dbt_parse == 'true' && vars.DBT_PARSE_ENABLED == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          DBT_HOST: ${{ secrets.dbt_host }}
+          DBT_USER: ${{ secrets.dbt_user }}
+          DBT_PASSWORD: ${{ secrets.dbt_password }}
+          DBT_PORT: ${{ secrets.dbt_port }}
+          DBT_DBNAME: ${{ secrets.dbt_dbname }}
+          DBT_SCHEMA: ${{ secrets.dbt_schema }}
+          DBT_PROFILES_EXAMPLE: ${{ steps.config.outputs.dbt_profiles_example }}
+        run: |
+          test -n "$DBT_HOST" && test -n "$DBT_USER" && test -n "$DBT_PASSWORD" || {
+            echo "The dbt-parse capability requires dbt_host, dbt_user, and dbt_password secrets when DBT_PARSE_ENABLED is true." >&2
+            exit 1
+          }
+          cp "$DBT_PROFILES_EXAMPLE" profiles.yml
+          uv run dbt parse --profiles-dir . --no-version-check
+
+      - name: Run Node lint
+        if: ${{ steps.config.outputs.node_check_lint == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm run lint
+
+      - name: Run Node typecheck
+        if: ${{ steps.config.outputs.node_check_typecheck == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm run typecheck
+
+      - name: Run Node tests
+        if: ${{ steps.config.outputs.node_check_test == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm test -- --run
+
+      - name: Build Node application
+        if: ${{ steps.config.outputs.node_check_build == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm run build
+
+      - name: Build Python package
+        if: ${{ steps.config.outputs.build_python_package == 'true' }}
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv build
+
+      - name: Run pre-commit
+        if: ${{ steps.config.outputs.check_pre_commit == 'true' }}
+        env:
+          SKIP: no-commit-to-branch
+        run: git -C "$GITHUB_WORKSPACE" ls-files -z | xargs -0 uv run --directory "${{ steps.config.outputs.working_directory }}" pre-commit run --files
+
