@@ -33,10 +33,6 @@ on:
         description: Optional dbt schema for the dbt-parse capability.
         required: false
 
-permissions:
-  contents: read
-  statuses: write
-
 jobs:
   validation:
     name: validation

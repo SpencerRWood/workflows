@@ -54,7 +54,8 @@ class ValidationStatusTests(unittest.TestCase):
         self.assertIn("publish_commit_status:", workflow)
         self.assertIn("default: false", workflow)
         self.assertIn("default: validation", workflow)
-        self.assertIn("statuses: write", workflow)
+        self.assertNotIn("statuses: write", workflow)
+        self.assertNotIn("\npermissions:\n", workflow)
         self.assertIn("if: ${{ inputs.publish_commit_status }}", workflow)
         self.assertIn("if: ${{ always() && inputs.publish_commit_status }}", workflow)
         self.assertLess(

@@ -52,7 +52,8 @@ jobs:
 
 Both inputs are optional: `publish_commit_status` defaults to `false`, and
 `status_context` defaults to `validation`. Existing callers need no changes or
-extra token permissions. An opted-in caller grants its `GITHUB_TOKEN`
+extra token permissions. The shared workflow uses the caller's token scope;
+an opted-in caller grants its `GITHUB_TOKEN`
 `statuses: write`; the shared workflow posts `pending` before the configured
 checks and then `success`, `failure`, or `error` from the same validation job.
 Publishing requires a pull request event and a valid head SHA and context.
