@@ -30,6 +30,37 @@ pass only their non-secret paths. Consumers must create the named GitHub
 Environment before first deployment so its deployment history provides the
 previous-successful rollback target.
 
+## Optional PR validation commit status
+
+`validate.yml@v1` runs the checks declared in the caller's `.github/release.toml`.
+GitHub Actions check runs remain its normal validation result. A caller that
+needs to expose that result to a cross-repository integration can also mirror
+it to a commit status on the exact pull request head SHA:
+
+```yaml
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  validation:
+    uses: SpencerRWood/workflows/.github/workflows/validate.yml@v1
+    with:
+      publish_commit_status: true
+      status_context: infrastructure-validation
+```
+
+Both inputs are optional: `publish_commit_status` defaults to `false`, and
+`status_context` defaults to `validation`. Existing callers need no changes or
+extra token permissions. An opted-in caller grants its `GITHUB_TOKEN`
+`statuses: write`; the shared workflow posts `pending` before the configured
+checks and then `success`, `failure`, or `error` from the same validation job.
+Publishing requires a pull request event and a valid head SHA and context.
+The status is an interoperability bridge, not another set of validation checks.
+For infrastructure artifact promotion, only the exact dev image PR may merge
+automatically after this status succeeds and its diff is reverified. Production
+promotion remains manual.
+
 ## Container publishing
 
 `container-release.yml` is the reusable GHCR publishing contract for application
