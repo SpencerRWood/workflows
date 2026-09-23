@@ -57,26 +57,14 @@ class Config:
         image_name = env["IMAGE_NAME"]
         version = env["RELEASE_TAG"]
         context = env["STATUS_CONTEXT"]
-        prefix = env["PROMOTION_BRANCH_PREFIX"] or f"chore/{image_name}-"
-        template = env["PR_TITLE_TEMPLATE"]
         if not REPOSITORY.fullmatch(repository) or not BRANCH.fullmatch(base):
             raise ValueError("invalid infrastructure repository or base branch")
         if file != "environments/dev.yml":
             raise ValueError("dev promotion supports only environments/dev.yml")
-        if not BRANCH.fullmatch(prefix) or not prefix.endswith("-"):
-            raise ValueError("invalid promotion branch prefix")
         if not re.fullmatch(r"[a-z][a-z0-9-]*", image_name):
             raise ValueError("invalid image name")
         if not re.fullmatch(r"[A-Za-z0-9_-]+", context):
             raise ValueError("invalid status context")
-        if not template.startswith("chore(deps): update ") or "\n" in template:
-            raise ValueError(
-                "PR title must retain the infrastructure patch-release format"
-            )
-        fields = set(re.findall(r"\{([^{}]+)\}", template))
-        if fields - {"version", "image_name"} or "{version}" not in template:
-            raise ValueError("invalid PR title template")
-        title = template.format(version=version, image_name=image_name)
         reference = validate_artifact(
             owner=env["APPLICATION_REPOSITORY"].split("/", 1)[0],
             image_name=image_name,
@@ -95,8 +83,8 @@ class Config:
             version,
             env["IMAGE_REPOSITORY"],
             reference,
-            prefix + version,
-            title,
+            f"chore/{image_name}-{version}",
+            f"chore(deps): update {image_name} to {version}",
             context,
         )
 

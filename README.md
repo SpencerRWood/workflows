@@ -329,17 +329,17 @@ addition to its `release` and `container` jobs:
       version_image: ${{ needs.container.outputs.version_image }}
       image_digest: ${{ needs.container.outputs.image_digest }}
       version_image_digest: ${{ needs.container.outputs.version_image_digest }}
-      promotion_branch_prefix: chore/portfolio-website-
-      pr_title_template: 'chore(deps): update website portfolio to {version}'
     secrets:
       infrastructure_token: ${{ secrets.INFRASTRUCTURE_PR_TOKEN }}
 ```
 
 `infrastructure_base_branch` defaults to `main`, `environment_file` to
-`environments/dev.yml`, `promotion_branch_prefix` to `chore/<image_name>-`,
-`pr_title_template` to `chore(deps): update {image_name} to {version}`, and
-`status_context` to `infrastructure-validation`. The workflow accepts only the
-dev environment file and a single top-level `<app>_image_ref` key. The four
+`environments/dev.yml`, and `status_context` to `infrastructure-validation`.
+The workflow derives the branch `chore/<image_name>-<release_tag>` and the
+PR, commit, and squash-merge title
+`chore(deps): update <image_name> to <release_tag>` from its validated inputs.
+The workflow accepts only the dev environment file and a single top-level
+`<app>_image_ref` key. The four
 publisher outputs must agree with the release tag, GHCR owner, image name, and
 SHA256 digest. A newer dev version or a changed digest for the same version
 blocks an older rerun.

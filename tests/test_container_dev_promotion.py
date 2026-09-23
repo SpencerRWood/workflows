@@ -41,10 +41,53 @@ ENV = {
     "VERSION_IMAGE": f"{REPOSITORY}:{VERSION}",
     "IMAGE_DIGEST": DIGEST,
     "VERSION_IMAGE_DIGEST": REFERENCE,
-    "PROMOTION_BRANCH_PREFIX": "chore/portfolio-website-",
-    "PR_TITLE_TEMPLATE": "chore(deps): update website portfolio to {version}",
     "STATUS_CONTEXT": "infrastructure-validation",
 }
+
+
+class NamingTests(unittest.TestCase):
+    def test_portfolio_release_names(self) -> None:
+        version = "v0.8.3"
+        repository = "ghcr.io/spencerrwood/portfolio-website"
+        cfg = Config.from_environment(
+            ENV
+            | {
+                "RELEASE_TAG": version,
+                "VERSION_IMAGE": f"{repository}:{version}",
+                "VERSION_IMAGE_DIGEST": f"{repository}:{version}@{DIGEST}",
+            }
+        )
+        self.assertEqual(cfg.branch, "chore/portfolio-website-v0.8.3")
+        self.assertEqual(cfg.title, "chore(deps): update portfolio-website to v0.8.3")
+
+    def test_other_image_uses_same_convention(self) -> None:
+        name = "wood-events-service"
+        repository = f"ghcr.io/spencerrwood/{name}"
+        cfg = Config.from_environment(
+            ENV
+            | {
+                "IMAGE_NAME": name,
+                "IMAGE_REPOSITORY": repository,
+                "VERSION_IMAGE": f"{repository}:{VERSION}",
+                "VERSION_IMAGE_DIGEST": f"{repository}:{VERSION}@{DIGEST}",
+            }
+        )
+        self.assertEqual(cfg.branch, "chore/wood-events-service-v1.2.3")
+        self.assertEqual(cfg.title, "chore(deps): update wood-events-service to v1.2.3")
+
+    def test_invalid_image_names_and_release_tags_are_rejected(self) -> None:
+        for name in ("Portfolio-Website", "invalid/name", "-invalid"):
+            with (
+                self.subTest(image_name=name),
+                self.assertRaisesRegex(ValueError, "invalid image name"),
+            ):
+                Config.from_environment(ENV | {"IMAGE_NAME": name})
+        for version in ("1.2.3", "v1.2.3-rc1", "v01.2.3"):
+            with (
+                self.subTest(release_tag=version),
+                self.assertRaisesRegex(ValueError, "invalid stable release version"),
+            ):
+                Config.from_environment(ENV | {"RELEASE_TAG": version})
 
 
 class PinTests(unittest.TestCase):
@@ -167,6 +210,12 @@ class PullTests(unittest.TestCase):
                 pull[location][key] = value
                 with self.assertRaises(ValueError):
                     validate_pull(pull, self.files, self.cfg)
+
+    def test_wrong_promotion_title_fails(self) -> None:
+        pull = copy.deepcopy(self.pull)
+        pull["title"] = "chore(deps): update website portfolio to v1.2.3"
+        with self.assertRaisesRegex(ValueError, "title"):
+            validate_pull(pull, self.files, self.cfg)
 
     def test_status_missing_pending_success_failure_error_and_wrong_sha(self) -> None:
         status = {
