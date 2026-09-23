@@ -10,10 +10,6 @@ on:
         required: false
         type: string
         default: main
-      environment_file:
-        required: false
-        type: string
-        default: environments/dev.yml
       image_key:
         required: true
         type: string
@@ -58,7 +54,7 @@ jobs:
       APPLICATION_REPOSITORY: ${{ github.repository }}
       INFRASTRUCTURE_REPOSITORY: ${{ inputs.infrastructure_repository }}
       INFRASTRUCTURE_BASE_BRANCH: ${{ inputs.infrastructure_base_branch }}
-      ENVIRONMENT_FILE: ${{ inputs.environment_file }}
+      ENVIRONMENT_FILE: environments/dev.yml
       IMAGE_KEY: ${{ inputs.image_key }}
       IMAGE_NAME: ${{ inputs.image_name }}
       RELEASE_TAG: ${{ inputs.release_tag }}

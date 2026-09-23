@@ -8,9 +8,10 @@ files in this repository.
 
 Consumers pin the public contract to the stable major version:
 `SpencerRWood/workflows/.github/workflows/release.yml@v1`. Development happens
-on `main`; a future breaking public contract will be released as `v2`. Consumers
-must not use `@main` as their long-term contract. The published `v1` tag is the
-current stable public contract.
+on `main`; breaking contracts receive a new major tag. Consumers must not use
+`@main` as their long-term contract. The published `v1` tag remains available
+for backward compatibility. Container dev promotion uses `@v2` for its
+reduced input contract.
 The [main branch policy](docs/branch-rules.md) records why `workflows` is
 protected while consumer rulesets remain disabled for release write-back.
 
@@ -285,7 +286,7 @@ semantic_release = true
 
 ## Containerized Application Dev Deployment
 
-`promote-container-to-dev.yml@v1` connects a published, digest-qualified GHCR
+`promote-container-to-dev.yml@v2` connects a published, digest-qualified GHCR
 image to one image pin in `infrastructure/environments/dev.yml`. It creates or
 reuses an infrastructure PR, waits up to 20 minutes for the trusted
 `infrastructure-validation` commit status on its exact head SHA, rechecks the
@@ -302,7 +303,7 @@ To onboard another containerized application:
    `environments/dev.yml`, initially set to a valid digest-qualified image.
 5. Configure runtime secrets, environment, migrations, and health checks in
    infrastructure as required by the service.
-6. Call `promote-container-to-dev.yml@v1` after a successful container release.
+6. Call `promote-container-to-dev.yml@v2` after a successful container release.
 7. Add an application repository secret containing a fine-grained token scoped
    only to `SpencerRWood/infrastructure`: Contents read/write, Pull requests
    read/write, Commit statuses read, and Metadata read. Pass it as
@@ -317,7 +318,7 @@ addition to its `release` and `container` jobs:
   promotion:
     needs: [release, container]
     if: ${{ needs.release.outputs.released == 'true' && needs.container.result == 'success' }}
-    uses: SpencerRWood/workflows/.github/workflows/promote-container-to-dev.yml@v1
+    uses: SpencerRWood/workflows/.github/workflows/promote-container-to-dev.yml@v2
     permissions:
       contents: read
     with:
@@ -333,8 +334,25 @@ addition to its `release` and `container` jobs:
       infrastructure_token: ${{ secrets.INFRASTRUCTURE_PR_TOKEN }}
 ```
 
-`infrastructure_base_branch` defaults to `main`, `environment_file` to
-`environments/dev.yml`, and `status_context` to `infrastructure-validation`.
+The v2 public inputs are exactly:
+
+| Input | Required | Default |
+| --- | --- | --- |
+| `infrastructure_repository` | yes | — |
+| `infrastructure_base_branch` | no | `main` |
+| `image_key` | yes | — |
+| `image_name` | yes | — |
+| `release_tag` | yes | — |
+| `image_repository` | yes | — |
+| `version_image` | yes | — |
+| `image_digest` | yes | — |
+| `version_image_digest` | yes | — |
+| `status_context` | no | `infrastructure-validation` |
+
+The required secret is `infrastructure_token`.
+`promote-container-to-dev.yml@v2` always targets `environments/dev.yml`;
+callers cannot select another manifest. The `@v1` contract remains available
+for callers that have not migrated.
 The workflow derives the branch `chore/<image_name>-<release_tag>` and the
 PR, commit, and squash-merge title
 `chore(deps): update <image_name> to <release_tag>` from its validated inputs.

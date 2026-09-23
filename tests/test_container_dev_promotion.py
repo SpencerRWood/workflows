@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import sys
 import tempfile
 import unittest
@@ -46,6 +47,36 @@ ENV = {
 
 
 class NamingTests(unittest.TestCase):
+    def test_v2_public_input_contract(self) -> None:
+        workflow = (
+            Path(__file__).parents[1] / ".github/workflows/promote-container-to-dev.yml"
+        ).read_text(encoding="utf-8")
+        inputs = workflow.split("    inputs:\n", 1)[1].split("    secrets:\n", 1)[0]
+        self.assertEqual(
+            re.findall(r"^      ([a-z_]+):$", inputs, re.MULTILINE),
+            [
+                "infrastructure_repository",
+                "infrastructure_base_branch",
+                "image_key",
+                "image_name",
+                "release_tag",
+                "image_repository",
+                "version_image",
+                "image_digest",
+                "version_image_digest",
+                "status_context",
+            ],
+        )
+
+    def test_only_canonical_dev_manifest_is_allowed(self) -> None:
+        self.assertEqual(Config.from_environment(ENV).file, "environments/dev.yml")
+        with self.assertRaisesRegex(ValueError, "only environments/dev.yml"):
+            Config.from_environment(ENV | {"ENVIRONMENT_FILE": "environments/prod.yml"})
+        workflow = (
+            Path(__file__).parents[1] / ".github/workflows/promote-container-to-dev.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ENVIRONMENT_FILE: environments/dev.yml", workflow)
+
     def test_portfolio_release_names(self) -> None:
         version = "v0.8.3"
         repository = "ghcr.io/spencerrwood/portfolio-website"
