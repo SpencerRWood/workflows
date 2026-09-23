@@ -34,9 +34,11 @@ or a different release design.
 
 Infrastructure and homelab retain their separate Renovate update and
 automerge policies. Renovate PRs run the same centralized validation as human
-PRs, but GitHub does not currently require that check before a consumer PR can
-merge. Approved dependency merges still enter the same semantic-release and
-deployment path. PostgreSQL compatibility-major updates remain attended.
+PRs. Because GitHub does not require that check on consumer branches,
+`platformAutomerge` is disabled and Renovate itself waits for passing checks
+before merging eligible PRs. Approved dependency merges still enter the same
+semantic-release and deployment path. PostgreSQL compatibility-major updates
+remain attended.
 
 Reconsider consumer branch protection if additional human developers gain
 write access, external contributions become common, multiple automated
