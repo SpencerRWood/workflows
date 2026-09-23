@@ -35,14 +35,6 @@ on:
       version_image_digest:
         required: true
         type: string
-      promotion_branch_prefix:
-        required: false
-        type: string
-        default: ''
-      pr_title_template:
-        required: false
-        type: string
-        default: 'chore(deps): update {image_name} to {version}'
       status_context:
         required: false
         type: string
@@ -74,8 +66,6 @@ jobs:
       VERSION_IMAGE: ${{ inputs.version_image }}
       IMAGE_DIGEST: ${{ inputs.image_digest }}
       VERSION_IMAGE_DIGEST: ${{ inputs.version_image_digest }}
-      PROMOTION_BRANCH_PREFIX: ${{ inputs.promotion_branch_prefix }}
-      PR_TITLE_TEMPLATE: ${{ inputs.pr_title_template }}
       STATUS_CONTEXT: ${{ inputs.status_context }}
     steps:
       - name: Check out workflow implementation
