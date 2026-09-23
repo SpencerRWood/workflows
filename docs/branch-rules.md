@@ -1,38 +1,47 @@
-# Main branch protection
+# Main branch policy
 
-After the GitHub Pro upgrade on 2026-09-23, all four repositories have rulesets
-targeting `refs/heads/main`. The `workflows` ruleset is active. The three consumer
-rulesets are currently disabled because their semantic-release jobs still push a
-generated version commit to `main`; activating PR-only protection without a
-release identity would break releases and deployments. No actor can bypass the
-active `workflows` ruleset.
+This is an intentional single-developer policy. `workflows` is the high-trust
+CI/CD control-plane repository: changes there affect multiple consumers. Its
+`main` ruleset is active and requires a pull request and the GitHub Actions
+`validation` check. It blocks force pushes and deletion, requires the PR head
+to be current with `main`, and has no bypass actor. One approving review is not
+required while `SpencerRWood` is the only eligible human reviewer.
 
-| Repository | Ruleset | State | Required PR check when active |
+| Repository | `main` ruleset | Enforcement | PR validation check |
 | --- | --- | --- | --- |
 | `SpencerRWood/workflows` | [23876698](https://github.com/SpencerRWood/workflows/rules/23876698) | Active | `validation` |
 | `SpencerRWood/infrastructure` | [23876717](https://github.com/SpencerRWood/infrastructure/rules/23876717) | Disabled | `validation / validation` |
 | `SpencerRWood/homelab` | [23876719](https://github.com/SpencerRWood/homelab/rules/23876719) | Disabled | `validation / validation` |
 | `SpencerRWood/portfolio-website` | [23876720](https://github.com/SpencerRWood/portfolio-website/rules/23876720) | Disabled | `validation / validation` |
 
-The configured checks are restricted to the GitHub Actions app. `workflows`
-requires the PR head to be current with `main`; the other three are configured
-to require passing validation on the PR head without an extra rebase. The rulesets
-specify zero approving reviews because `SpencerRWood` is currently the only
-eligible collaborator on `workflows`; requiring another approval would block
-every workflow change. Add an eligible reviewer and then require one approval
-for `workflows` as a separate administration change.
+The consumer rulesets remain configured but disabled. Each consumer normally
+uses a branch and pull request, delegates PR checks to `validate.yml@v1`, and
+declares its checks in `.github/release.toml`. Its local pre-commit configuration
+blocks accidental development commits directly to `main`. The shared CI
+validation skips only `no-commit-to-branch` so it can check the default branch.
+These safeguards remain useful even though GitHub does not require consumer PR
+checks server-side.
 
-To activate the consumer rulesets, first supply a dedicated release identity
-that can push only the generated semantic-release commit through the PR rule,
-or change the release process so it no longer pushes to `main`. GitHub rejected
-the built-in GitHub Actions integration as a bypass actor for these personal
-repositories. Validate the chosen release path before enabling the rulesets.
+The consumer release jobs must keep writing the new version to checked-in
+`pyproject.toml`, committing `chore(release): X.Y.Z` to `main`, tagging that
+commit `vX.Y.Z`, and publishing the GitHub Release. For infrastructure and
+homelab, the tag then starts the existing Ansible deployment. For
+portfolio-website, the tag starts immutable GHCR publication. Its currently
+open [handoff PR](https://github.com/SpencerRWood/portfolio-website/pull/9)
+adds an infrastructure artifact-promotion PR for review. Consumer branch
+protection is disabled so release write-back works without a bypass credential
+or a different release design.
 
-Infrastructure and homelab use Renovate platform auto-merge for their approved
-dependency classes. When their rulesets are active, required validation must
-pass before auto-merge. The homelab policy currently includes Docker minor
-and major updates; that policy was retained for this tranche and deserves a
-separate owner decision. PostgreSQL compatibility-major updates remain attended.
+Infrastructure and homelab retain their separate Renovate update and
+automerge policies. Renovate PRs run the same centralized validation as human
+PRs, but GitHub does not currently require that check before a consumer PR can
+merge. Approved dependency merges still enter the same semantic-release and
+deployment path. PostgreSQL compatibility-major updates remain attended.
 
-The application image promotion PR requires a manual merge. A future decision
-to auto-merge only that PR type needs its own explicit policy and permissions.
+Reconsider consumer branch protection if additional human developers gain
+write access, external contributions become common, multiple automated
+identities gain write access, direct-push mistakes recur, GitHub-side
+enforcement becomes more valuable than release write-back simplicity, or the
+release architecture changes to support protected-branch write-back cleanly.
+Branch protection is not required for reusable workflows, Renovate, GHCR,
+GitHub Environments, deployments, or semantic-release itself.
