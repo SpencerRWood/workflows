@@ -17,6 +17,11 @@ on:
       playbook_path:
         required: true
         type: string
+      ansible_config_path:
+        description: Optional repository-relative Ansible configuration path.
+        required: false
+        type: string
+        default: ''
       ansible_tags:
         required: false
         type: string
@@ -165,6 +170,7 @@ jobs:
           SECRETS_FILE: ${{ inputs.secrets_file }}
           INVENTORY_PATH: ${{ inputs.inventory_path }}
           PLAYBOOK_PATH: ${{ inputs.playbook_path }}
+          ANSIBLE_CONFIG: ${{ inputs.ansible_config_path }}
           VALIDATION_COMMAND: ${{ inputs.validation_command }}
           CHECK_COMMAND: ${{ inputs.check_command }}
           PRIVILEGED_CHECK_COMMAND: ${{ inputs.privileged_check_command }}
@@ -313,6 +319,7 @@ jobs:
           with open(temporary, 'w') as stream:
               json.dump(state, stream, sort_keys=True)
               stream.write('\n')
+          os.chmod(temporary, 0o600)
           os.replace(temporary, path)
           PY
 

@@ -1,0 +1,22 @@
+name: Validate workflow contracts
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v9.0.0
+      - name: Install parser test dependency
+        run: uv pip install --system python-semantic-release==10.6.2
+      - name: Test workflow contracts
+        run: python -m unittest discover -s tests -v
