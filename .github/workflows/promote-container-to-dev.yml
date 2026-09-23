@@ -1,0 +1,133 @@
+name: Promote published container to infrastructure dev
+
+on:
+  workflow_call:
+    inputs:
+      infrastructure_repository:
+        required: true
+        type: string
+      infrastructure_base_branch:
+        required: false
+        type: string
+        default: main
+      environment_file:
+        required: false
+        type: string
+        default: environments/dev.yml
+      image_key:
+        required: true
+        type: string
+      image_name:
+        required: true
+        type: string
+      release_tag:
+        required: true
+        type: string
+      image_repository:
+        required: true
+        type: string
+      version_image:
+        required: true
+        type: string
+      image_digest:
+        required: true
+        type: string
+      version_image_digest:
+        required: true
+        type: string
+      promotion_branch_prefix:
+        required: false
+        type: string
+        default: ''
+      pr_title_template:
+        required: false
+        type: string
+        default: 'chore(deps): update {image_name} to {version}'
+      status_context:
+        required: false
+        type: string
+        default: infrastructure-validation
+    secrets:
+      infrastructure_token:
+        required: true
+        description: Fine-grained token scoped to the infrastructure repository.
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Validate and merge exact dev image PR
+    runs-on: ubuntu-latest
+    concurrency:
+      group: container-dev-${{ inputs.infrastructure_repository }}-${{ inputs.image_name }}
+      cancel-in-progress: false
+    env:
+      APPLICATION_REPOSITORY: ${{ github.repository }}
+      INFRASTRUCTURE_REPOSITORY: ${{ inputs.infrastructure_repository }}
+      INFRASTRUCTURE_BASE_BRANCH: ${{ inputs.infrastructure_base_branch }}
+      ENVIRONMENT_FILE: ${{ inputs.environment_file }}
+      IMAGE_KEY: ${{ inputs.image_key }}
+      IMAGE_NAME: ${{ inputs.image_name }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      IMAGE_REPOSITORY: ${{ inputs.image_repository }}
+      VERSION_IMAGE: ${{ inputs.version_image }}
+      IMAGE_DIGEST: ${{ inputs.image_digest }}
+      VERSION_IMAGE_DIGEST: ${{ inputs.version_image_digest }}
+      PROMOTION_BRANCH_PREFIX: ${{ inputs.promotion_branch_prefix }}
+      PR_TITLE_TEMPLATE: ${{ inputs.pr_title_template }}
+      STATUS_CONTEXT: ${{ inputs.status_context }}
+    steps:
+      - name: Check out workflow implementation
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          git init "$RUNNER_TEMP/workflow-contract"
+          git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
+          git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
+
+      - name: Check out published application release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          path: application
+          persist-credentials: false
+
+      - name: Validate immutable published artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/verify_container_promotion_pr.py" artifact
+
+      - name: Verify scoped infrastructure credential
+        env:
+          GH_TOKEN: ${{ secrets.infrastructure_token }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo 'infrastructure_token is not configured' >&2
+            exit 1
+          fi
+          gh api "repos/$INFRASTRUCTURE_REPOSITORY/contents/$ENVIRONMENT_FILE?ref=$INFRASTRUCTURE_BASE_BRANCH" --silent
+
+      - name: Check out current infrastructure base
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.infrastructure_repository }}
+          ref: ${{ inputs.infrastructure_base_branch }}
+          fetch-depth: 0
+          path: infrastructure
+          token: ${{ secrets.infrastructure_token }}
+
+      - name: Create or reuse exact infrastructure PR
+        id: promotion
+        env:
+          GH_TOKEN: ${{ secrets.infrastructure_token }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/verify_container_promotion_pr.py" prepare
+
+      - name: Wait for validation and merge exact dev promotion
+        if: steps.promotion.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.infrastructure_token }}
+          PR_NUMBER: ${{ steps.promotion.outputs.number }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/verify_container_promotion_pr.py" merge

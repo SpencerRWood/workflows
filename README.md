@@ -283,6 +283,67 @@ profiles_example = "profiles.example.yml"
 semantic_release = true
 ```
 
+## Containerized Application Dev Deployment
+
+`promote-container-to-dev.yml@v1` connects a published, digest-qualified GHCR
+image to one image pin in `infrastructure/environments/dev.yml`. It creates or
+reuses an infrastructure PR, waits up to 20 minutes for the trusted
+`infrastructure-validation` commit status on its exact head SHA, rechecks the
+one-line diff, and squash-merges the dev PR. Infrastructure then performs its
+own semantic patch release and Beelink dev deployment. This workflow never
+deploys or promotes production.
+
+To onboard another containerized application:
+
+1. Create the application repository and `.github/release.toml`.
+2. Use `validate.yml@v1` for PRs and `release.yml@v1` for semantic releases.
+3. Publish the immutable GHCR image with `container-release.yml@v1`.
+4. Add the service definition and `<app>_image_ref` to infrastructure's
+   `environments/dev.yml`, initially set to a valid digest-qualified image.
+5. Configure runtime secrets, environment, migrations, and health checks in
+   infrastructure as required by the service.
+6. Call `promote-container-to-dev.yml@v1` after a successful container release.
+7. Add an application repository secret containing a fine-grained token scoped
+   only to `SpencerRWood/infrastructure`: Contents read/write, Pull requests
+   read/write, Commit statuses read, and Metadata read. Pass it as
+   `infrastructure_token`. Checks and administration permissions are unnecessary.
+8. Merge normal application changes. New releases then deploy to dev through
+   the infrastructure-owned flow; production promotion stays manual.
+
+The application release wrapper needs only the following promotion job in
+addition to its `release` and `container` jobs:
+
+```yaml
+  promotion:
+    needs: [release, container]
+    if: ${{ needs.release.outputs.released == 'true' && needs.container.result == 'success' }}
+    uses: SpencerRWood/workflows/.github/workflows/promote-container-to-dev.yml@v1
+    permissions:
+      contents: read
+    with:
+      infrastructure_repository: SpencerRWood/infrastructure
+      image_key: portfolio_website_image_ref
+      image_name: portfolio-website
+      release_tag: ${{ needs.release.outputs.release_tag }}
+      image_repository: ${{ needs.container.outputs.image_repository }}
+      version_image: ${{ needs.container.outputs.version_image }}
+      image_digest: ${{ needs.container.outputs.image_digest }}
+      version_image_digest: ${{ needs.container.outputs.version_image_digest }}
+      promotion_branch_prefix: chore/portfolio-website-
+      pr_title_template: 'chore(deps): update website portfolio to {version}'
+    secrets:
+      infrastructure_token: ${{ secrets.INFRASTRUCTURE_PR_TOKEN }}
+```
+
+`infrastructure_base_branch` defaults to `main`, `environment_file` to
+`environments/dev.yml`, `promotion_branch_prefix` to `chore/<image_name>-`,
+`pr_title_template` to `chore(deps): update {image_name} to {version}`, and
+`status_context` to `infrastructure-validation`. The workflow accepts only the
+dev environment file and a single top-level `<app>_image_ref` key. The four
+publisher outputs must agree with the release tag, GHCR owner, image name, and
+SHA256 digest. A newer dev version or a changed digest for the same version
+blocks an older rerun.
+
 ## Implementation
 
 The validation workflow checks out the consumer repository and
