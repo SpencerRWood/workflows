@@ -39,7 +39,8 @@ jobs:
         # Keep helper code outside the consumer checkout so repository tools
         # cannot scan it as application code.
         env:
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          # job.workflow_sha identifies this reusable workflow, not the caller.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           git init "$RUNNER_TEMP/workflow-contract"
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
