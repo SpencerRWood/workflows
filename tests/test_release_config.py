@@ -103,7 +103,7 @@ semantic_release = true
 
     def test_helper_checkout_is_outside_consumer_workspace(self) -> None:
         workflow = VALIDATION_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("WORKFLOW_SHA: ${{ job.workflow_sha }}", workflow)
+        self.assertIn("WORKFLOW_SHA: ${{ github.workflow_sha }}", workflow)
         self.assertIn('git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"', workflow)
         self.assertIn(
             'python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml',
