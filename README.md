@@ -25,6 +25,13 @@ the last successful GitHub Environment deployment ref once and checks it again.
 It restores repository-defined runtime configuration only, never a blind database
 rollback.
 
+Automated release callers can pass `skip_superseded: true` to
+`deploy-ansible.yml@v1` (or through a target wrapper). After target validation
+and immediately before apply, it compares the immutable release checkout with
+the repository's current default branch head. A superseded deployment exits
+successfully without applying or updating deployment metadata. The default is
+`false`, so an explicitly requested historical deployment remains available.
+
 Deployment runs only on a trusted self-hosted control-node runner. Secret values
 remain in runner-local protected files and are sourced only for Ansible; callers
 pass only their non-secret paths. Consumers must create the named GitHub
@@ -372,6 +379,12 @@ outside the consumer checkout. It then loads the consumer configuration using
 dependencies, and runs only the declared capabilities. The release workflow
 calls that same validation contract before invoking
 `semantic-release version --vcs-release`.
+Release runs for one repository branch share a concurrency group with
+`cancel-in-progress: false`: an active release is allowed to finish, and GitHub
+keeps the newest pending run when more commits arrive. Immediately before
+semantic-release, the shared workflow compares its validated checkout with the
+remote branch and skips a superseded run. The newest pending run then validates
+and releases the accumulated changes on main.
 It has no public workflow inputs. It uses the automatic `GITHUB_TOKEN` for
 semantic-release and exposes `released` and `release_tag` outputs to gate the
 consumer's existing deployment job. Container publishing and infrastructure
