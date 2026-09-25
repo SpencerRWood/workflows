@@ -33,7 +33,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Keep one active release and the newest pending run for each caller branch.
+  group: release-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -52,7 +53,7 @@ jobs:
     needs: validation
     runs-on: ubuntu-latest
     outputs:
-      released: ${{ steps.semantic_release.outputs.released }}
+      released: ${{ steps.semantic_release.outputs.released || 'false' }}
       release_tag: ${{ steps.semantic_release.outputs.release_tag }}
     permissions:
       contents: write
@@ -100,8 +101,15 @@ jobs:
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
 
+      - name: Check release checkout is still the branch head
+        id: current_head
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py"
+
       - name: Run semantic-release
         id: semantic_release
+        if: steps.current_head.outputs.current == 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

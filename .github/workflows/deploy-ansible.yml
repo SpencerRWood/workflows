@@ -11,6 +11,11 @@ on:
         description: Immutable release tag to deploy.
         required: true
         type: string
+      skip_superseded:
+        description: Skip automated deployment when this release is no longer the default branch head.
+        required: false
+        type: boolean
+        default: false
       inventory_path:
         required: true
         type: string
@@ -193,8 +198,30 @@ jobs:
             eval "$CHECK_COMMAND"
           fi
 
+      - name: Check release is still the default branch head
+        id: current_head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRE_CURRENT: ${{ inputs.skip_superseded }}
+          RELEASE_REPOSITORY: ${{ inputs.repository }}
+        run: |
+          if [[ "$REQUIRE_CURRENT" != true ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch=$(gh api "repos/$RELEASE_REPOSITORY" --jq .default_branch)
+          remote=$(git ls-remote --exit-code origin "refs/heads/$branch" | cut -f1)
+          local=$(git rev-parse HEAD)
+          if [[ "$local" != "$remote" ]]; then
+            echo "Skipping superseded deployment: release=$local $branch=$remote"
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'current=true' >> "$GITHUB_OUTPUT"
+
       - name: Apply release configuration
         id: apply
+        if: steps.current_head.outputs.current == 'true'
         continue-on-error: true
         env:
           SECRETS_FILE: ${{ inputs.secrets_file }}
@@ -224,7 +251,7 @@ jobs:
         id: health
         # Run the wrapper unconditionally; GitHub otherwise applies an implicit
         # success guard around a continue-on-error deployment step.
-        if: ${{ always() }}
+        if: ${{ always() && steps.current_head.outputs.current == 'true' }}
         continue-on-error: true
         env:
           SECRETS_FILE: ${{ inputs.secrets_file }}
@@ -284,7 +311,7 @@ jobs:
           echo "Rolled back to $PREVIOUS_REF after failed deployment of ${{ inputs.ref }}."
 
       - name: Record durable deployment metadata
-        if: ${{ always() && inputs.deployment_state_file != '' }}
+        if: ${{ always() && steps.current_head.outputs.current == 'true' && inputs.deployment_state_file != '' }}
         env:
           STATE_FILE: ${{ inputs.deployment_state_file }}
           RELEASE: ${{ inputs.ref }}
@@ -324,7 +351,7 @@ jobs:
           PY
 
       - name: Report deployment result
-        if: ${{ always() }}
+        if: ${{ always() && steps.current_head.outputs.current == 'true' }}
         env:
           APPLY: ${{ steps.apply.outcome }}
           HEALTH: ${{ steps.health.outcome }}
