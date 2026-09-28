@@ -72,6 +72,34 @@ promotion remains manual.
 
 ## Container publishing
 
+### Dagster candidate-image runtime gate
+
+Dagster consumers can opt in with no CI database credentials:
+
+```toml
+[dagster]
+runtime_validation = true
+smoke_job = "runtime_smoke_job" # default
+grpc_port = 4000               # default
+```
+
+The application template owns its compatible Dagster, `dagster-postgres`,
+SQLAlchemy, and psycopg2 dependency set and exposes the secret-free smoke job
+through `Definitions`. The centralized container workflow owns temporary
+PostgreSQL, a standard PostgreSQL-backed `dagster.yaml`, candidate gRPC startup,
+the real smoke run, and direct PostgreSQL run/event row checks. Infrastructure
+owns the deployed code-location configuration. This gate checks the
+Dagster/PostgreSQL runtime boundary; it does not exercise application APIs.
+
+For opted-in consumers the workflow builds once to a unique temporary GHCR
+candidate tag, runs the image by its immutable digest, and copies that same
+digest to the semantic version and commit SHA tags only after validation. It
+verifies the final tag digest equals the tested digest and emits that digest to
+downstream promotion. A failed runtime check prevents container publication and
+Infrastructure promotion. Semantic-release currently creates the GitHub release
+first; an image gate failure leaves that release without an image until fixed.
+Non-Dagster consumers retain the existing publishing path.
+
 `container-release.yml` is the reusable GHCR publishing contract for application
 repositories. Call it after `release.yml` reports `released == 'true'`, passing
 the `release_tag` output. It checks out that tag in the caller repository,
@@ -191,6 +219,7 @@ Each consumer owns `.github/release.toml`. Schema version 1 has these tables:
 | `[build]` | none | `python_package = true` enables `uv build`. |
 | `[node]` | all fields when present | Enables locked npm setup and Node checks. |
 | `[dbt]` | none | `profiles_example` for the `dbt-parse` capability (default `profiles.example.yml`). |
+| `[dagster]` | `runtime_validation` when table is present | Enables the candidate-image PostgreSQL runtime gate; `smoke_job` and `grpc_port` default to `runtime_smoke_job` and `4000`. |
 
 Supported Python validation capabilities are `ruff`, `ruff-format`, `mypy`,
 `pytest`, `pytest-coverage`, `pre-commit`, `docker-compose`, `sqlfluff`,

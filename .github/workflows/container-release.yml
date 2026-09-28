@@ -70,8 +70,8 @@ jobs:
       image_repository: ${{ steps.prepare.outputs.image_repository }}
       version_image: ${{ steps.prepare.outputs.version_image }}
       sha_image: ${{ steps.prepare.outputs.sha_image }}
-      image_digest: ${{ steps.build.outputs.digest }}
-      version_image_digest: ${{ steps.prepare.outputs.version_image }}@${{ steps.build.outputs.digest }}
+      image_digest: ${{ steps.build.outputs.digest || steps.promoted.outputs.digest }}
+      version_image_digest: ${{ steps.prepare.outputs.version_image }}@${{ steps.build.outputs.digest || steps.promoted.outputs.digest }}
     steps:
       - name: Check out release tag
         uses: actions/checkout@v6
@@ -100,6 +100,10 @@ jobs:
           PLATFORMS: ${{ inputs.platforms }}
           GH_TOKEN: ${{ github.token }}
         run: python3 "$RUNNER_TEMP/workflow-contract/scripts/container_release.py"
+
+      - name: Load Dagster runtime configuration
+        id: config
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.4.1
@@ -145,6 +149,7 @@ jobs:
 
       - name: Build and publish release image
         id: build
+        if: steps.config.outputs.dagster_runtime_validation != 'true'
         uses: docker/build-push-action@v7.4.0
         with:
           context: ${{ inputs.context }}
@@ -158,9 +163,51 @@ jobs:
           cache-from: type=gha,scope=${{ github.repository }}-container
           cache-to: type=gha,mode=max,scope=${{ github.repository }}-container
 
+      - name: Build Dagster candidate once
+        id: candidate
+        if: steps.config.outputs.dagster_runtime_validation == 'true'
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          platforms: ${{ inputs.platforms }}
+          build-args: ${{ inputs.build_args }}
+          target: ${{ inputs.target }}
+          tags: ${{ steps.prepare.outputs.image_repository }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=${{ github.repository }}-container
+          cache-to: type=gha,mode=max,scope=${{ github.repository }}-container
+
+      - name: Validate exact Dagster candidate digest
+        if: steps.config.outputs.dagster_runtime_validation == 'true'
+        env:
+          IMAGE: ${{ steps.prepare.outputs.image_repository }}@${{ steps.candidate.outputs.digest }}
+          SMOKE_JOB: ${{ steps.config.outputs.dagster_smoke_job }}
+          GRPC_PORT: ${{ steps.config.outputs.dagster_grpc_port }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/dagster_runtime.py" "$IMAGE" --smoke-job "$SMOKE_JOB" --grpc-port "$GRPC_PORT"
+
+      - name: Promote validated digest to release tags
+        id: promoted
+        if: steps.config.outputs.dagster_runtime_validation == 'true'
+        env:
+          IMAGE: ${{ steps.prepare.outputs.image_repository }}@${{ steps.candidate.outputs.digest }}
+          VERSION_IMAGE: ${{ steps.prepare.outputs.version_image }}
+          SHA_IMAGE: ${{ steps.prepare.outputs.sha_image }}
+          EXPECTED_DIGEST: ${{ steps.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$VERSION_IMAGE" --tag "$SHA_IMAGE" "$IMAGE"
+          actual_digest="sha256:$(docker buildx imagetools inspect "$VERSION_IMAGE" --raw | sha256sum | cut -d ' ' -f1)"
+          test "$actual_digest" = "$EXPECTED_DIGEST" || {
+            echo "Promoted digest $actual_digest differs from validated digest $EXPECTED_DIGEST" >&2
+            exit 1
+          }
+          echo "digest=$actual_digest" >> "$GITHUB_OUTPUT"
+
       - name: Verify pushed digest
         env:
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.promoted.outputs.digest }}
         run: |
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
             echo 'Docker build did not return a usable sha256 digest.' >&2
