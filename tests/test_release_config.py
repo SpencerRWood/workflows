@@ -58,6 +58,59 @@ semantic_release = true
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("check_ruff=true", outputs)
         self.assertIn("build_python_package=true", outputs)
+        self.assertIn("dagster_runtime_validation=false", outputs)
+
+    def test_dagster_opt_in_needs_no_database_credentials(self) -> None:
+        result, outputs = self.run_config(
+            """version = 1
+[python]
+[validation]
+checks = ["pytest"]
+[dagster]
+runtime_validation = true
+smoke_job = "runtime_smoke_job"
+[release]
+semantic_release = true
+""",
+            ("Dockerfile",),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("dagster_runtime_validation=true", outputs)
+        self.assertIn("dagster_smoke_job=runtime_smoke_job", outputs)
+        self.assertIn("dagster_grpc_port=4000", outputs)
+
+    def test_dagster_table_requires_explicit_validation_switch(self) -> None:
+        result, _ = self.run_config(
+            """version = 1
+[python]
+[validation]
+checks = ["pytest"]
+[dagster]
+smoke_job = "runtime_smoke_job"
+[release]
+semantic_release = true
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dagster.runtime_validation", result.stderr)
+
+    def test_dagster_fields_reject_unsafe_values(self) -> None:
+        for field in ('smoke_job = "job; echo unsafe"', 'grpc_port = 0'):
+            with self.subTest(field=field):
+                result, _ = self.run_config(
+                    f'''version = 1
+[python]
+[validation]
+checks = ["pytest"]
+[dagster]
+runtime_validation = true
+{field}
+[release]
+semantic_release = true
+''',
+                    ("Dockerfile",),
+                )
+                self.assertNotEqual(result.returncode, 0)
 
     def test_node_configuration(self) -> None:
         result, outputs = self.run_config(

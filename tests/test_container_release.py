@@ -143,7 +143,7 @@ class ContainerReleaseTests(unittest.TestCase):
         )
         self.assertIn("ref: ${{ inputs.release_tag }}", workflow)
         self.assertIn(
-            "version_image_digest: ${{ steps.prepare.outputs.version_image }}@${{ steps.build.outputs.digest }}",
+            "version_image_digest: ${{ steps.prepare.outputs.version_image }}@${{ steps.build.outputs.digest || steps.promoted.outputs.digest }}",
             workflow,
         )
         self.assertIn("packages: write", workflow)

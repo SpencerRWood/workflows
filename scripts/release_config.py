@@ -27,7 +27,7 @@ VALID_CHECKS = frozenset(
     }
 )
 VALID_NODE_CHECKS = frozenset({"lint", "typecheck", "test", "build"})
-TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "release"})
+TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "release"})
 TABLE_FIELDS = {
     "project": frozenset({"working_directory"}),
     "python": frozenset({"version", "dependency_group"}),
@@ -36,6 +36,7 @@ TABLE_FIELDS = {
     "build": frozenset({"python_package"}),
     "node": frozenset({"directory", "version", "checks"}),
     "dbt": frozenset({"profiles_example"}),
+    "dagster": frozenset({"runtime_validation", "smoke_job", "grpc_port"}),
     "release": frozenset({"semantic_release"}),
 }
 
@@ -152,6 +153,7 @@ def main() -> None:
         "build": mapping(config.get("build", {}), "build"),
         "node": mapping(config.get("node", {}), "node"),
         "dbt": mapping(config.get("dbt", {}), "dbt"),
+        "dagster": mapping(config.get("dagster", {}), "dagster"),
         "release": release,
     }.items():
         validate_table_fields(table, table_name)
@@ -178,6 +180,19 @@ def main() -> None:
 
     build = mapping(config.get("build", {}), "build")
     python_package = boolean(build.get("python_package"), "build.python_package")
+    dagster = mapping(config.get("dagster", {}), "dagster")
+    if dagster and "runtime_validation" not in dagster:
+        fail("dagster.runtime_validation is required when [dagster] is present.")
+    dagster_runtime_validation = boolean(
+        dagster.get("runtime_validation"), "dagster.runtime_validation"
+    )
+    smoke_job = identifier(
+        string(dagster.get("smoke_job"), "dagster.smoke_job", "runtime_smoke_job"),
+        "dagster.smoke_job",
+    )
+    grpc_port = dagster.get("grpc_port", 4000)
+    if isinstance(grpc_port, bool) or not isinstance(grpc_port, int) or not 1 <= grpc_port <= 65535:
+        fail("dagster.grpc_port must be an integer from 1 to 65535.")
     coverage = mapping(config.get("coverage", {}), "coverage")
     coverage_target = string(coverage.get("target"), "coverage.target", "")
     if "pytest-coverage" in checks and not coverage_target:
@@ -210,6 +225,9 @@ def main() -> None:
     emit("python_version", python_version)
     emit("dependency_group", dependency_group)
     emit("build_python_package", python_package)
+    emit("dagster_runtime_validation", dagster_runtime_validation)
+    emit("dagster_smoke_job", smoke_job)
+    emit("dagster_grpc_port", str(grpc_port))
     emit("coverage_target", coverage_target)
     emit("node_enabled", node_enabled)
     emit("node_directory", node_directory)
