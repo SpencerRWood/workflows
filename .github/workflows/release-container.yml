@@ -38,8 +38,7 @@ concurrency:
 
 jobs:
   validation:
-    # Pin the nested validation workflow to this reusable workflow's commit.
-    uses: $/.github/workflows/validate.yml
+    uses: SpencerRWood/workflows/.github/workflows/validate.yml@v3
     secrets:
       dbt_host: ${{ secrets.dbt_host }}
       dbt_user: ${{ secrets.dbt_user }}

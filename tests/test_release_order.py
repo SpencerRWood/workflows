@@ -67,6 +67,7 @@ class ReleaseOrderTests(unittest.TestCase):
                 )
 
     def test_version_and_required_gates_precede_vcs_publication(self) -> None:
+        self.assertIn("uses: SpencerRWood/workflows/.github/workflows/validate.yml@v3", INTEGRATED)
         stages = (
             "Determine next version with semantic-release",
             "Prepare semantic release metadata without a commit or tag",
