@@ -59,6 +59,41 @@ semantic_release = true
         self.assertIn("check_ruff=true", outputs)
         self.assertIn("build_python_package=true", outputs)
         self.assertIn("dagster_runtime_validation=false", outputs)
+        self.assertIn("container_publish=false", outputs)
+
+    def test_integrated_container_without_dagster(self) -> None:
+        result, outputs = self.run_config(
+            '''version = 1
+[python]
+[validation]
+checks = ["pytest"]
+[container]
+publish = true
+image_name = "sample-app"
+[release]
+semantic_release = true
+''',
+            ("Dockerfile",),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("container_publish=true", outputs)
+        self.assertIn("container_image_name=sample-app", outputs)
+        self.assertIn("dagster_runtime_validation=false", outputs)
+
+    def test_integrated_container_requires_dockerfile(self) -> None:
+        result, _ = self.run_config(
+            '''version = 1
+[python]
+[validation]
+checks = ["pytest"]
+[container]
+publish = true
+[release]
+semantic_release = true
+'''
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("container.dockerfile", result.stderr)
 
     def test_dagster_opt_in_needs_no_database_credentials(self) -> None:
         result, outputs = self.run_config(

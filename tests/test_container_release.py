@@ -83,6 +83,13 @@ class ContainerReleaseTests(unittest.TestCase):
             result["sha_image"], f"ghcr.io/spencerrwood/website-portfolio:sha-{sha}"
         )
 
+    def test_candidate_preparation_needs_no_git_tag_or_github_release(self) -> None:
+        subprocess.run(["git", "-C", str(self.root), "tag", "-d", "v1.2.3"], check=True, capture_output=True)
+        with patch.object(container_release, "command", wraps=container_release.command) as command:
+            result = container_release.prepare(self.environment, require_release=False)
+        self.assertEqual(result["release_tag"], "v1.2.3")
+        self.assertFalse(any(call.args[0] == "gh" for call in command.call_args_list))
+
     def test_rejects_missing_or_invalid_release_tag(self) -> None:
         for tag in ("", "main", "v1.2", "v01.2.3", "v1.2.3; echo unsafe"):
             with (

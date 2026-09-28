@@ -1,0 +1,265 @@
+name: Validate and publish container release
+
+on:
+  workflow_call:
+    outputs:
+      released:
+        value: ${{ jobs.release.outputs.released }}
+      release_tag:
+        value: ${{ jobs.release.outputs.release_tag }}
+      image_repository:
+        value: ${{ jobs.release.outputs.image_repository }}
+      version_image:
+        value: ${{ jobs.release.outputs.version_image }}
+      image_digest:
+        value: ${{ jobs.release.outputs.image_digest }}
+      version_image_digest:
+        value: ${{ jobs.release.outputs.version_image_digest }}
+    secrets:
+      dbt_host:
+        required: false
+      dbt_user:
+        required: false
+      dbt_password:
+        required: false
+      dbt_port:
+        required: false
+      dbt_dbname:
+        required: false
+      dbt_schema:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    # Pin the nested validation workflow to this reusable workflow's commit.
+    uses: $/.github/workflows/validate.yml
+    secrets:
+      dbt_host: ${{ secrets.dbt_host }}
+      dbt_user: ${{ secrets.dbt_user }}
+      dbt_password: ${{ secrets.dbt_password }}
+      dbt_port: ${{ secrets.dbt_port }}
+      dbt_dbname: ${{ secrets.dbt_dbname }}
+      dbt_schema: ${{ secrets.dbt_schema }}
+
+  release:
+    needs: validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    outputs:
+      released: ${{ steps.publish.outputs.released || 'false' }}
+      release_tag: ${{ steps.publish.outputs.release_tag }}
+      image_repository: ${{ steps.image.outputs.image_repository }}
+      version_image: ${{ steps.image.outputs.version_image }}
+      image_digest: ${{ steps.digest.outputs.digest }}
+      version_image_digest: ${{ steps.image.outputs.version_image }}@${{ steps.digest.outputs.digest }}
+    steps:
+      - name: Check out consumer repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check out workflow implementation
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          git init "$RUNNER_TEMP/workflow-contract"
+          git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
+          git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
+
+      - name: Set up configuration Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Load release configuration
+        id: config
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
+
+      - name: Require container publication
+        run: test "${{ steps.config.outputs.container_publish }}" = true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ steps.config.outputs.python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            ${{ steps.config.outputs.working_directory }}/pyproject.toml
+            ${{ steps.config.outputs.working_directory }}/uv.lock
+
+      - name: Sync Python dependencies
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
+
+      - name: Check release checkout is still the branch head
+        id: current_head
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py"
+
+      - name: Determine next version with semantic-release
+        id: version
+        if: steps.current_head.outputs.current == 'true'
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
+          tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "semantic-release did not determine a stable release tag: $tag" >&2
+            exit 1
+          }
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            echo "No new semantic release is due ($tag already exists)."
+            exit 0
+          fi
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare semantic release metadata without a commit or tag
+        if: steps.version.outputs.release_tag != ''
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --no-commit --no-tag --no-push --no-vcs-release --skip-build
+
+      - name: Lock prepared version before building the candidate
+        if: steps.version.outputs.release_tag != ''
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        run: |
+          set -euo pipefail
+          uv lock --offline
+          git add uv.lock
+
+      - name: Prepare candidate image references without a GitHub Release
+        id: image
+        if: steps.version.outputs.release_tag != ''
+        env:
+          REQUIRE_RELEASE: "false"
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          IMAGE_NAME: ${{ steps.config.outputs.container_image_name }}
+          DOCKERFILE: ${{ steps.config.outputs.container_dockerfile }}
+          BUILD_CONTEXT: ${{ steps.config.outputs.container_context }}
+          PLATFORMS: ${{ steps.config.outputs.container_platforms }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/container_release.py"
+
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.release_tag != ''
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.release_tag != ''
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Find reusable commit-specific candidate
+        id: existing
+        if: steps.version.outputs.release_tag != ''
+        env:
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.image_repository }}:candidate-${{ steps.image.outputs.commit_sha }}-${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$CANDIDATE_IMAGE" >/dev/null 2>&1; then
+            digest="sha256:$(docker buildx imagetools inspect "$CANDIDATE_IMAGE" --raw | sha256sum | cut -d ' ' -f1)"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build candidate image once
+        id: candidate
+        if: steps.version.outputs.release_tag != '' && steps.existing.outputs.digest == ''
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: ${{ steps.config.outputs.container_context }}
+          file: ${{ steps.config.outputs.container_dockerfile }}
+          push: true
+          platforms: ${{ steps.config.outputs.container_platforms }}
+          tags: ${{ steps.image.outputs.image_repository }}:candidate-${{ steps.image.outputs.commit_sha }}-${{ steps.version.outputs.release_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.image.outputs.commit_sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.release_tag }}
+          cache-from: type=gha,scope=${{ github.repository }}-container
+          cache-to: type=gha,mode=max,scope=${{ github.repository }}-container
+
+      - name: Verify exact candidate digest
+        id: digest
+        if: steps.version.outputs.release_tag != ''
+        env:
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.image_repository }}:candidate-${{ steps.image.outputs.commit_sha }}-${{ steps.version.outputs.release_tag }}
+          EXPECTED_DIGEST: ${{ steps.existing.outputs.digest || steps.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+          actual="sha256:$(docker buildx imagetools inspect "$CANDIDATE_IMAGE" --raw | sha256sum | cut -d ' ' -f1)"
+          test "$actual" = "$EXPECTED_DIGEST"
+          echo "digest=$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Validate exact Dagster candidate digest
+        if: steps.version.outputs.release_tag != '' && steps.config.outputs.dagster_runtime_validation == 'true'
+        env:
+          IMAGE: ${{ steps.image.outputs.image_repository }}@${{ steps.digest.outputs.digest }}
+          SMOKE_JOB: ${{ steps.config.outputs.dagster_smoke_job }}
+          GRPC_PORT: ${{ steps.config.outputs.dagster_grpc_port }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/dagster_runtime.py" "$IMAGE" --smoke-job "$SMOKE_JOB" --grpc-port "$GRPC_PORT"
+
+      - name: Publish the validated digest under release image tags
+        if: steps.version.outputs.release_tag != ''
+        env:
+          SOURCE_IMAGE: ${{ steps.image.outputs.image_repository }}@${{ steps.digest.outputs.digest }}
+          VERSION_IMAGE: ${{ steps.image.outputs.version_image }}
+          SHA_IMAGE: ${{ steps.image.outputs.sha_image }}
+          EXPECTED_DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for image in "$VERSION_IMAGE" "$SHA_IMAGE"; do
+            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+              actual="sha256:$(docker buildx imagetools inspect "$image" --raw | sha256sum | cut -d ' ' -f1)"
+              test "$actual" = "$EXPECTED_DIGEST" || { echo "Existing release image tag has a different digest: $image" >&2; exit 1; }
+            else
+              docker buildx imagetools create --tag "$image" "$SOURCE_IMAGE"
+              actual="sha256:$(docker buildx imagetools inspect "$image" --raw | sha256sum | cut -d ' ' -f1)"
+              test "$actual" = "$EXPECTED_DIGEST" || { echo "Published digest differs from validated digest: $image" >&2; exit 1; }
+            fi
+          done
+
+      - name: Finalize semantic-release and GitHub Release
+        id: publish
+        if: steps.version.outputs.release_tag != ''
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_TAG: ${{ steps.version.outputs.release_tag }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py"
+          actual_tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+          test "$actual_tag" = "$EXPECTED_TAG" || { echo "semantic-release version changed during validation: $EXPECTED_TAG -> $actual_tag" >&2; exit 1; }
+          if ! uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release; then
+            echo "Publication failed after image validation. The image tags remain; inspect Git tag and GitHub Release before retrying." >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/$EXPECTED_TAG^{commit}")" = "$(git rev-parse HEAD)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$EXPECTED_TAG" --silent
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$EXPECTED_TAG" >> "$GITHUB_OUTPUT"

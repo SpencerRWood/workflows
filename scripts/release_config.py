@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import sys
 import tomllib
 from pathlib import Path
 from typing import Never
@@ -27,7 +26,7 @@ VALID_CHECKS = frozenset(
     }
 )
 VALID_NODE_CHECKS = frozenset({"lint", "typecheck", "test", "build"})
-TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "release"})
+TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "container", "release"})
 TABLE_FIELDS = {
     "project": frozenset({"working_directory"}),
     "python": frozenset({"version", "dependency_group"}),
@@ -37,6 +36,7 @@ TABLE_FIELDS = {
     "node": frozenset({"directory", "version", "checks"}),
     "dbt": frozenset({"profiles_example"}),
     "dagster": frozenset({"runtime_validation", "smoke_job", "grpc_port"}),
+    "container": frozenset({"publish", "image_name", "dockerfile", "context", "platforms"}),
     "release": frozenset({"semantic_release"}),
 }
 
@@ -154,6 +154,7 @@ def main() -> None:
         "node": mapping(config.get("node", {}), "node"),
         "dbt": mapping(config.get("dbt", {}), "dbt"),
         "dagster": mapping(config.get("dagster", {}), "dagster"),
+        "container": mapping(config.get("container", {}), "container"),
         "release": release,
     }.items():
         validate_table_fields(table, table_name)
@@ -181,6 +182,14 @@ def main() -> None:
     build = mapping(config.get("build", {}), "build")
     python_package = boolean(build.get("python_package"), "build.python_package")
     dagster = mapping(config.get("dagster", {}), "dagster")
+    container = mapping(config.get("container", {}), "container")
+    container_publish = boolean(container.get("publish"), "container.publish")
+    container_image_name = identifier(string(container.get("image_name"), "container.image_name", ""), "container.image_name") if container.get("image_name") else ""
+    container_dockerfile = relative_directory(string(container.get("dockerfile"), "container.dockerfile", "Dockerfile"), "container.dockerfile")
+    container_context = relative_directory(string(container.get("context"), "container.context", "."), "container.context")
+    container_platforms = string(container.get("platforms"), "container.platforms", "linux/amd64")
+    if container_publish and not (root / container_dockerfile).is_file():
+        fail(f"container.dockerfile '{container_dockerfile}' was not found.")
     if dagster and "runtime_validation" not in dagster:
         fail("dagster.runtime_validation is required when [dagster] is present.")
     dagster_runtime_validation = boolean(
@@ -226,6 +235,11 @@ def main() -> None:
     emit("dependency_group", dependency_group)
     emit("build_python_package", python_package)
     emit("dagster_runtime_validation", dagster_runtime_validation)
+    emit("container_publish", container_publish)
+    emit("container_image_name", container_image_name)
+    emit("container_dockerfile", container_dockerfile)
+    emit("container_context", container_context)
+    emit("container_platforms", container_platforms)
     emit("dagster_smoke_job", smoke_job)
     emit("dagster_grpc_port", str(grpc_port))
     emit("coverage_target", coverage_target)

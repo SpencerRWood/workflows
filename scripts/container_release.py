@@ -37,8 +37,8 @@ def local_path(root: Path, value: str, *, directory: bool) -> Path:
     return resolved
 
 
-def prepare(environment: dict[str, str]) -> dict[str, str]:
-    """Check the release and derive image references from its exact commit."""
+def prepare(environment: dict[str, str], *, require_release: bool = True) -> dict[str, str]:
+    """Derive image references; optionally verify an already published release."""
     tag = environment.get("RELEASE_TAG", "")
     if not RELEASE_TAG.fullmatch(tag):
         raise ValueError(
@@ -62,21 +62,22 @@ def prepare(environment: dict[str, str]) -> dict[str, str]:
     local_path(root, environment.get("DOCKERFILE", "Dockerfile"), directory=False)
 
     sha = command("git", "-C", str(root), "rev-parse", "HEAD")
-    tag_sha = command(
-        "git", "-C", str(root), "rev-parse", f"refs/tags/{tag}^{{commit}}"
-    )
-    if sha != tag_sha:
-        raise ValueError(f"checked-out commit {sha} does not match release tag {tag}")
+    if require_release:
+        tag_sha = command(
+            "git", "-C", str(root), "rev-parse", f"refs/tags/{tag}^{{commit}}"
+        )
+        if sha != tag_sha:
+            raise ValueError(f"checked-out commit {sha} does not match release tag {tag}")
 
-    release = json.loads(
-        command("gh", "api", f"repos/{repository}/releases/tags/{tag}")
-    )
-    if (
-        release.get("tag_name") != tag
-        or release.get("draft") is not False
-        or release.get("prerelease") is not False
-    ):
-        raise ValueError(f"{tag} must be a published, non-prerelease GitHub Release")
+        release = json.loads(
+            command("gh", "api", f"repos/{repository}/releases/tags/{tag}")
+        )
+        if (
+            release.get("tag_name") != tag
+            or release.get("draft") is not False
+            or release.get("prerelease") is not False
+        ):
+            raise ValueError(f"{tag} must be a published, non-prerelease GitHub Release")
 
     image_repository = f"ghcr.io/{owner.lower()}/{image_name}"
     return {
@@ -90,7 +91,7 @@ def prepare(environment: dict[str, str]) -> dict[str, str]:
 
 def main() -> int:
     try:
-        outputs = prepare(dict(os.environ))
+        outputs = prepare(dict(os.environ), require_release=os.environ.get("REQUIRE_RELEASE", "true") == "true")
     except (KeyError, ValueError, subprocess.CalledProcessError) as error:
         print(f"container release validation failed: {error}", file=sys.stderr)
         return 1
