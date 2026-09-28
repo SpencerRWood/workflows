@@ -97,10 +97,10 @@ digest to the semantic version and commit SHA tags only after validation. It
 verifies the final tag digest equals the tested digest and emits that digest to
 downstream promotion. A failed runtime check prevents container publication and
 Infrastructure promotion. Semantic-release currently creates the GitHub release
-first; an image gate failure leaves that release without an image until fixed.
-Non-Dagster consumers retain the existing publishing path.
+first in the legacy v1 wrapper. Container consumers should use the integrated
+`release-container.yml@v3` contract described below.
 
-`container-release.yml` is the reusable GHCR publishing contract for application
+`container-release.yml@v1` is the legacy GHCR publishing contract for application
 repositories. Call it after `release.yml` reports `released == 'true'`, passing
 the `release_tag` output. It checks out that tag in the caller repository,
 verifies the checkout matches the tag and a published, stable GitHub Release,
@@ -111,7 +111,7 @@ release. Consumers call `release.yml@v1`, `validate.yml@v1`,
 `container-release.yml@v1`, and `deploy-ansible.yml@v1`. The immutable
 `v1.1.0` tag remains available for consumers that need that exact revision.
 
-The caller must grant `contents: write` to the release job and `contents: read`
+The legacy caller must grant `contents: write` to the release job and `contents: read`
 plus `packages: write` to the container job. The container job uses its automatic
 `GITHUB_TOKEN` to read the release and publish to GHCR. No PAT is needed when the
 calling repository and package permit GitHub Actions package access. The image
@@ -161,7 +161,7 @@ jobs:
       release_tag: ${{ needs.release.outputs.release_tag }}
 ```
 
-The flow is `semantic release` → `released=true` and `release_tag=v1.2.3` →
+The legacy flow is `semantic release` → `released=true` and `release_tag=v1.2.3` →
 `container-release.yml` → `ghcr.io/<owner>/<repository>:v1.2.3` → a future
 infrastructure deployment. The workflow also pushes a full commit SHA tag and
 provides `version_image_digest` for downstream deployment. Deployment should
@@ -169,6 +169,39 @@ use that digest-qualified reference, never a moving `latest` tag. Both image
 tags are release identifiers; the workflow refuses to overwrite existing tags.
 GHCR permits tag reassignment by other users with package write access, so the
 digest is the immutable artifact identity.
+
+### Integrated container release (v3)
+
+Container consumers opt in with `[container] publish = true` in
+`.github/release.toml` and call `release-container.yml@v3`. The caller grants
+only that release job `contents: write` and `packages: write`; promotion needs
+`contents: read`. The container table also accepts `image_name` (default:
+repository name), `dockerfile` (default: `Dockerfile`), `context` (default:
+`.`), and `platforms` (default: `linux/amd64`). Non-container repositories
+continue to call `release.yml@v1` and need no Docker or package write access.
+
+The new sequence is source validation → semantic-release `version --print-tag`
+→ prepare local version/changelog metadata and lockfile without a commit or tag → one
+commit-specific candidate image → exact digest verification → Dagster
+PostgreSQL runtime gate when enabled → release image tags on that same digest →
+semantic-release `version --vcs-release` → Infrastructure promotion. **GitHub
+Release publication happens only after all required image and runtime gates
+pass.** The candidate tag can be reused on retry; both released image tags
+must resolve to its digest. The workflow emits that same digest and a
+digest-qualified reference for promotion. A failed build or runtime gate leaves
+no Git tag or GitHub Release. A failed image tag operation prevents semantic
+publication. A failed semantic publication blocks promotion; already created
+image tags are retained and can be verified on retry. If semantic-release
+pushes its Git tag but GitHub Release creation fails, manual inspection and
+recovery of that partial VCS publication is required before another release
+attempt. A later Infrastructure promotion failure leaves the valid release
+and image intact.
+
+The candidate build includes the locally prepared version metadata and
+changelog. Semantic-release commits and tags those same files only after
+validation. Release calls are serialized per repository and branch, and the
+checkout is rechecked against the remote branch immediately before final
+publication.
 
 Buildx uses BuildKit and GitHub Actions cache. OCI labels record the source
 repository, release commit, and version. A normal PR validation run never
@@ -220,6 +253,7 @@ Each consumer owns `.github/release.toml`. Schema version 1 has these tables:
 | `[node]` | all fields when present | Enables locked npm setup and Node checks. |
 | `[dbt]` | none | `profiles_example` for the `dbt-parse` capability (default `profiles.example.yml`). |
 | `[dagster]` | `runtime_validation` when table is present | Enables the candidate-image PostgreSQL runtime gate; `smoke_job` and `grpc_port` default to `runtime_smoke_job` and `4000`. |
+| `[container]` | `publish = true` for integrated releases | Selects the v2 container release contract and optional image build settings. |
 
 Supported Python validation capabilities are `ruff`, `ruff-format`, `mypy`,
 `pytest`, `pytest-coverage`, `pre-commit`, `docker-compose`, `sqlfluff`,
@@ -333,13 +367,14 @@ deploys or promotes production.
 To onboard another containerized application:
 
 1. Create the application repository and `.github/release.toml`.
-2. Use `validate.yml@v1` for PRs and `release.yml@v1` for semantic releases.
-3. Publish the immutable GHCR image with `container-release.yml@v1`.
+2. Use `validate.yml@v3` for PRs and `release-container.yml@v3` for
+   integrated semantic and image releases. Set `[container] publish = true`.
+3. Grant only the release call `contents: write` and `packages: write`.
 4. Add the service definition and `<app>_image_ref` to infrastructure's
    `environments/dev.yml`, initially set to a valid digest-qualified image.
 5. Configure runtime secrets, environment, migrations, and health checks in
    infrastructure as required by the service.
-6. Call `promote-container-to-dev.yml@v2` after a successful container release.
+6. Call `promote-container-to-dev.yml@v2` after a successful integrated release.
 7. Add an application repository secret containing a fine-grained token scoped
    only to `SpencerRWood/infrastructure`: Contents read/write, Pull requests
    read/write, Commit statuses read, and Metadata read. Pass it as
@@ -348,12 +383,12 @@ To onboard another containerized application:
    the infrastructure-owned flow; production promotion stays manual.
 
 The application release wrapper needs only the following promotion job in
-addition to its `release` and `container` jobs:
+addition to its integrated `release` job:
 
 ```yaml
   promotion:
-    needs: [release, container]
-    if: ${{ needs.release.outputs.released == 'true' && needs.container.result == 'success' }}
+    needs: release
+    if: ${{ needs.release.outputs.released == 'true' }}
     uses: SpencerRWood/workflows/.github/workflows/promote-container-to-dev.yml@v2
     permissions:
       contents: read
@@ -362,10 +397,10 @@ addition to its `release` and `container` jobs:
       image_key: portfolio_website_image_ref
       image_name: portfolio-website
       release_tag: ${{ needs.release.outputs.release_tag }}
-      image_repository: ${{ needs.container.outputs.image_repository }}
-      version_image: ${{ needs.container.outputs.version_image }}
-      image_digest: ${{ needs.container.outputs.image_digest }}
-      version_image_digest: ${{ needs.container.outputs.version_image_digest }}
+      image_repository: ${{ needs.release.outputs.image_repository }}
+      version_image: ${{ needs.release.outputs.version_image }}
+      image_digest: ${{ needs.release.outputs.image_digest }}
+      version_image_digest: ${{ needs.release.outputs.version_image_digest }}
     secrets:
       infrastructure_token: ${{ secrets.INFRASTRUCTURE_PR_TOKEN }}
 ```

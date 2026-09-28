@@ -106,6 +106,46 @@ class DependencyReleaseTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "1.2.4")
+            again = subprocess.run(
+                [sys.executable, "-m", "semantic_release", "--config", str(config), "version", "--print-tag"],
+                cwd=root, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertEqual(again.stdout.strip(), "v1.2.4")
+            self.assertFalse((root / "CHANGELOG.md").exists())
+            prepare = subprocess.run(
+                [sys.executable, "-m", "semantic_release", "--config", str(config), "version", "--no-commit", "--no-tag", "--no-push", "--no-vcs-release", "--skip-build"],
+                cwd=root, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(prepare.returncode, 0, prepare.stderr)
+            self.assertFalse(subprocess.run(["git", "show-ref", "--verify", "--quiet", "refs/tags/v1.2.4"], cwd=root).returncode == 0)
+            prepared_version = subprocess.run(
+                [sys.executable, "-m", "semantic_release", "--config", str(config), "version", "--print-tag"],
+                cwd=root, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(prepared_version.stdout.strip(), "v1.2.4")
+            prepared_files = {
+                name: (root / name).read_text()
+                for name in ("pyproject.toml", "CHANGELOG.md")
+            }
+            (root / "uv.lock").write_text("prepared-version = 1.2.4\n", encoding="utf-8")
+            subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
+            publish = subprocess.run(
+                [sys.executable, "-m", "semantic_release", "--config", str(config), "version", "--no-push", "--no-vcs-release"],
+                cwd=root, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(publish.returncode, 0, publish.stderr)
+            tag_sha = subprocess.check_output(["git", "rev-parse", "v1.2.4^{commit}"], cwd=root, text=True).strip()
+            head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            self.assertEqual(tag_sha, head_sha)
+            self.assertEqual(
+                subprocess.check_output(["git", "show", "v1.2.4:uv.lock"], cwd=root, text=True),
+                "prepared-version = 1.2.4\n",
+            )
+            self.assertEqual(
+                prepared_files,
+                {name: (root / name).read_text() for name in prepared_files},
+            )
 
 
 if __name__ == "__main__":
