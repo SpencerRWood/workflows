@@ -66,6 +66,40 @@ class DependencyReleaseTests(unittest.TestCase):
         self.assertIn("scripts/semantic_release_config.py", workflow)
         self.assertIn('semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release', workflow)
 
+    def test_tag_only_release_tags_validated_head_without_source_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pyproject = root / "pyproject.toml"
+            pyproject.write_text(
+                '[project]\nname = "release-test"\ndynamic = ["version"]\n'
+                '[tool.semantic_release]\ncommit_parser = "conventional"\n'
+                'tag_format = "v{version}"\n'
+                '[tool.semantic_release.commit_parser_options]\n'
+                'minor_tags = ["feat"]\npatch_tags = ["fix", "perf"]\n',
+                encoding="utf-8",
+            )
+            remote = root / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            subprocess.run(["git", "init", "-b", "main", str(root)], check=True, capture_output=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=root, check=True)
+            subprocess.run(["git", "add", "pyproject.toml"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "feat: initial release"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "tag", "v1.2.3"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "chore(deps): update image"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "push", "origin", "main", "--tags"], cwd=root, check=True, capture_output=True)
+            output = root / "release.json"
+            subprocess.run([sys.executable, str(ROOT / "scripts" / "semantic_release_config.py"), str(pyproject), str(output), "--tag-merged-commit"], check=True)
+            head_before = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            result = subprocess.run(
+                [sys.executable, "-m", "semantic_release", "--config", str(output), "version", "--no-commit", "--no-changelog", "--no-push", "--no-vcs-release", "--skip-build"],
+                cwd=root, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            head_after = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            tag_target = subprocess.check_output(["git", "rev-parse", "v1.2.4^{}"], cwd=root, text=True).strip()
+            self.assertEqual(head_before, head_after)
+            self.assertEqual(head_after, tag_target)
+
     def test_dependency_commit_increments_patch_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

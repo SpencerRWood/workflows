@@ -115,10 +115,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git tag --list > "$RUNNER_TEMP/tags-before-release"
-          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
-          uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release
+          release_options=()
+          config_options=()
+          if [[ "${{ steps.config.outputs.tag_merged_commit }}" == 'true' ]]; then
+            config_options+=(--tag-merged-commit)
+            release_options+=(--no-commit --no-changelog --skip-build)
+          fi
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release "${release_options[@]}"
           release_tag="$(git tag --points-at HEAD --sort=-v:refname | head -n 1)"
           if [[ -n "$release_tag" ]] && ! grep -Fxq "$release_tag" "$RUNNER_TEMP/tags-before-release"; then
+            if [[ "${{ steps.config.outputs.tag_merged_commit }}" == 'true' ]]; then
+              test "$(git rev-parse "refs/tags/${release_tag}^{commit}")" = "${GITHUB_SHA}"
+              RELEASE_REF="${GITHUB_REF}" python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
+            fi
             echo "released=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           else

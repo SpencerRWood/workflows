@@ -12,8 +12,8 @@ on `main`; breaking contracts receive a new major tag. Consumers must not use
 `@main` as their long-term contract. The published `v1` tag remains available
 for backward compatibility. Container dev promotion uses `@v2` for its
 reduced input contract.
-The [main branch policy](docs/branch-rules.md) records why `workflows` is
-protected while consumer rulesets remain disabled for release write-back.
+The [main branch policy](docs/branch-rules.md) records the protected consumer
+release model.
 
 `deploy-ansible.yml` is the complementary reusable deployment contract. A
 consumer calls it only after a GitHub Release is published, passes an immutable
