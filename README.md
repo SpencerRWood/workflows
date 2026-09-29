@@ -6,12 +6,20 @@ implementation concerns, not workflow APIs. Consumers declare their required
 capabilities in `.github/release.toml` and should never reference implementation
 files in this repository.
 
-Consumers pin the public contract to the stable major version:
-`SpencerRWood/workflows/.github/workflows/release.yml@v1`. Development happens
-on `main`; breaking contracts receive a new major tag. Consumers must not use
-`@main` as their long-term contract. The published `v1` tag remains available
-for backward compatibility. Container dev promotion uses `@v2` for its
-reduced input contract.
+Consumers pin each public contract to its stable major version. Development
+happens on `main`; breaking contracts receive a new major tag. Consumers
+must not use `@main` as their long-term contract.
+
+| Capability | Public reusable workflow |
+| --- | --- |
+| Non-container release and validation | `release.yml@v1`, `validate.yml@v1` |
+| Integrated container release and PR validation | `release-container.yml@v3`, `validate.yml@v3` |
+| Dev image promotion | `promote-container-to-dev.yml@v2` |
+| Ansible deployment and release resolution | `deploy-ansible.yml@v1`, `resolve-release.yml@v1` |
+
+The legacy `container-release.yml@v1` remains available for existing callers
+while they migrate to the integrated container release. Its filename is the
+reverse of the current public container release workflow.
 The [main branch policy](docs/branch-rules.md) records the protected consumer
 release model.
 
@@ -112,8 +120,10 @@ the `release_tag` output. It checks out that tag in the caller repository,
 verifies the checkout matches the tag and a published, stable GitHub Release,
 then builds and pushes the image. A branch commit or draft release cannot be
 published through this workflow. Stable `vMAJOR.MINOR.PATCH` tags are supported.
-The `v1` major tag is updated only after a backwards-compatible contract
-release. Consumers call `release.yml@v1`, `validate.yml@v1`,
+Existing callers can continue using this contract while migrating to the
+integrated `release-container.yml@v3` workflow. The `v1` major tag is
+updated only after a backwards-compatible contract release. Legacy consumers
+call `release.yml@v1`, `validate.yml@v1`,
 `container-release.yml@v1`, and `deploy-ansible.yml@v1`. The immutable
 `v1.1.0` tag remains available for consumers that need that exact revision.
 
@@ -259,7 +269,7 @@ Each consumer owns `.github/release.toml`. Schema version 1 has these tables:
 | `[node]` | all fields when present | Enables locked npm setup and Node checks. |
 | `[dbt]` | none | `profiles_example` for the `dbt-parse` capability (default `profiles.example.yml`). |
 | `[dagster]` | `runtime_validation` when table is present | Enables the candidate-image PostgreSQL runtime gate; `smoke_job` and `grpc_port` default to `runtime_smoke_job` and `4000`. |
-| `[container]` | `publish = true` for integrated releases | Selects the v2 container release contract and optional image build settings. |
+| `[container]` | `publish = true` for integrated releases | Selects the v3 container release contract and optional image build settings. |
 
 Supported Python validation capabilities are `ruff`, `ruff-format`, `mypy`,
 `pytest`, `pytest-coverage`, `pre-commit`, `docker-compose`, `sqlfluff`,
