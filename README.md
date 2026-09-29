@@ -25,6 +25,12 @@ the last successful GitHub Environment deployment ref once and checks it again.
 It restores repository-defined runtime configuration only, never a blind database
 rollback.
 
+`resolve-release.yml@v1` verifies a requested published release tag or selects
+the latest published release when its `ref` input is empty. It returns `ref` to
+the consumer's deployment job. Consumers can call it from one `deploy.yml`
+that supports both `workflow_call` and `workflow_dispatch`; the repository's
+runner, inventory, playbook, and protected local paths stay in that file.
+
 Automated release callers can pass `skip_superseded: true` to
 `deploy-ansible.yml@v1` (or through a target wrapper). After target validation
 and immediately before apply, it compares the immutable release checkout with
