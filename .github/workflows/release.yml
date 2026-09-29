@@ -122,6 +122,14 @@ jobs:
             release_options+=(--no-commit --no-changelog --skip-build)
           fi
           python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          if [[ "${{ steps.config.outputs.tag_merged_commit }}" != 'true' ]]; then
+            release_tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+            if ! git show-ref --verify --quiet "refs/tags/${release_tag}"; then
+              uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --no-commit --no-tag --no-push --no-vcs-release --skip-build
+              uv lock --offline
+              git add uv.lock
+            fi
+          fi
           uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release "${release_options[@]}"
           release_tag="$(git tag --points-at HEAD --sort=-v:refname | head -n 1)"
           if [[ -n "$release_tag" ]] && ! grep -Fxq "$release_tag" "$RUNNER_TEMP/tags-before-release"; then
