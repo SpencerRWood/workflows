@@ -65,6 +65,14 @@ class DependencyReleaseTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("scripts/semantic_release_config.py", workflow)
         self.assertIn('semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release', workflow)
+        stages = (
+            "version --no-commit --no-tag --no-push --no-vcs-release --skip-build",
+            "uv lock --offline",
+            "git add uv.lock",
+            'version --vcs-release "${release_options[@]}"',
+        )
+        self.assertEqual(list(map(workflow.index, stages)), sorted(map(workflow.index, stages)))
+        self.assertIn("if [[ \"${{ steps.config.outputs.tag_merged_commit }}\" != 'true' ]]; then", workflow)
 
     def test_tag_only_release_tags_validated_head_without_source_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -112,13 +120,14 @@ class DependencyReleaseTests(unittest.TestCase):
                 'minor_tags = ["feat"]\npatch_tags = ["fix", "perf"]\n',
                 encoding="utf-8",
             )
+            subprocess.run(["uv", "lock", "--offline"], cwd=root, check=True, capture_output=True)
             config = root / "release.json"
             subprocess.run(["git", "init", "-b", "main", str(root)], check=True, capture_output=True)
             subprocess.run(
                 ["git", "remote", "add", "origin", "https://github.com/example/release-test.git"],
                 cwd=root, check=True, capture_output=True,
             )
-            subprocess.run(["git", "add", "pyproject.toml"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "add", "pyproject.toml", "uv.lock"], cwd=root, check=True, capture_output=True)
             subprocess.run(
                 ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "feat: initial release"],
                 cwd=root, check=True, capture_output=True,
@@ -162,7 +171,7 @@ class DependencyReleaseTests(unittest.TestCase):
                 name: (root / name).read_text()
                 for name in ("pyproject.toml", "CHANGELOG.md")
             }
-            (root / "uv.lock").write_text("prepared-version = 1.2.4\n", encoding="utf-8")
+            subprocess.run(["uv", "lock", "--offline"], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
             publish = subprocess.run(
                 [sys.executable, "-m", "semantic_release", "--config", str(config), "version", "--no-push", "--no-vcs-release"],
@@ -172,10 +181,8 @@ class DependencyReleaseTests(unittest.TestCase):
             tag_sha = subprocess.check_output(["git", "rev-parse", "v1.2.4^{commit}"], cwd=root, text=True).strip()
             head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
             self.assertEqual(tag_sha, head_sha)
-            self.assertEqual(
-                subprocess.check_output(["git", "show", "v1.2.4:uv.lock"], cwd=root, text=True),
-                "prepared-version = 1.2.4\n",
-            )
+            locked = subprocess.check_output(["git", "show", "v1.2.4:uv.lock"], cwd=root, text=True)
+            self.assertIn('name = "release-test"\nversion = "1.2.4"', locked)
             self.assertEqual(
                 prepared_files,
                 {name: (root / name).read_text() for name in prepared_files},
