@@ -1,3 +1,6 @@
+# Legacy v1 contract for callers that publish after semantic-release.
+# New container consumers use release-container.yml@v3 so image validation
+# completes before the Git tag and GitHub Release are published.
 name: Publish release container
 
 on:
