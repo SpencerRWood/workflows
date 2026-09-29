@@ -126,7 +126,9 @@ jobs:
             release_tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
             if ! git show-ref --verify --quiet "refs/tags/${release_tag}"; then
               uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --no-commit --no-tag --no-push --no-vcs-release --skip-build
-              uv lock --offline
+              # The version bump changes project metadata. Resolve every supported
+              # Python marker, including packages absent from the runner cache.
+              uv lock
               git add uv.lock
             fi
           fi

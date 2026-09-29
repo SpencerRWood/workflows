@@ -65,9 +65,10 @@ class DependencyReleaseTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("scripts/semantic_release_config.py", workflow)
         self.assertIn('semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release', workflow)
+        self.assertNotIn("uv lock --offline", workflow)
         stages = (
             "version --no-commit --no-tag --no-push --no-vcs-release --skip-build",
-            "uv lock --offline",
+            "              uv lock\n",
             "git add uv.lock",
             'version --vcs-release "${release_options[@]}"',
         )
