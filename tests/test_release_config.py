@@ -61,6 +61,22 @@ semantic_release = true
         self.assertIn("dagster_runtime_validation=false", outputs)
         self.assertIn("container_publish=false", outputs)
 
+    def test_tag_merged_commit_is_limited_to_non_packages(self) -> None:
+        config = '''version = 1
+[python]
+[validation]
+checks = ["pre-commit"]
+[release]
+semantic_release = true
+tag_merged_commit = true
+'''
+        result, outputs = self.run_config(config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("tag_merged_commit=true", outputs)
+        result, _ = self.run_config(config + "[build]\npython_package = true\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires build.python_package = false", result.stderr)
+
     def test_integrated_container_without_dagster(self) -> None:
         result, outputs = self.run_config(
             '''version = 1

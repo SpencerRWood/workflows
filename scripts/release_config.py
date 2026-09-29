@@ -37,7 +37,7 @@ TABLE_FIELDS = {
     "dbt": frozenset({"profiles_example"}),
     "dagster": frozenset({"runtime_validation", "smoke_job", "grpc_port"}),
     "container": frozenset({"publish", "image_name", "dockerfile", "context", "platforms"}),
-    "release": frozenset({"semantic_release"}),
+    "release": frozenset({"semantic_release", "tag_merged_commit"}),
 }
 
 
@@ -181,6 +181,9 @@ def main() -> None:
 
     build = mapping(config.get("build", {}), "build")
     python_package = boolean(build.get("python_package"), "build.python_package")
+    tag_merged_commit = boolean(release.get("tag_merged_commit"), "release.tag_merged_commit")
+    if tag_merged_commit and python_package:
+        fail("release.tag_merged_commit requires build.python_package = false.")
     dagster = mapping(config.get("dagster", {}), "dagster")
     container = mapping(config.get("container", {}), "container")
     container_publish = boolean(container.get("publish"), "container.publish")
@@ -234,6 +237,7 @@ def main() -> None:
     emit("python_version", python_version)
     emit("dependency_group", dependency_group)
     emit("build_python_package", python_package)
+    emit("tag_merged_commit", tag_merged_commit)
     emit("dagster_runtime_validation", dagster_runtime_validation)
     emit("container_publish", container_publish)
     emit("container_image_name", container_image_name)

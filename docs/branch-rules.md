@@ -10,40 +10,24 @@ required while `SpencerRWood` is the only eligible human reviewer.
 | Repository | `main` ruleset | Enforcement | PR validation check |
 | --- | --- | --- | --- |
 | `SpencerRWood/workflows` | [23876698](https://github.com/SpencerRWood/workflows/rules/23876698) | Active | `validation` |
-| `SpencerRWood/infrastructure` | [23876717](https://github.com/SpencerRWood/infrastructure/rules/23876717) | Disabled | `validation / validation` |
-| `SpencerRWood/homelab` | [23876719](https://github.com/SpencerRWood/homelab/rules/23876719) | Disabled | `validation / validation` |
+| `SpencerRWood/infrastructure` | [23876717](https://github.com/SpencerRWood/infrastructure/rules/23876717) | Active | `validation / validation` |
+| `SpencerRWood/homelab` | [23876719](https://github.com/SpencerRWood/homelab/rules/23876719) | Active | `validation / validation` |
 | `SpencerRWood/portfolio-website` | [23876720](https://github.com/SpencerRWood/portfolio-website/rules/23876720) | Disabled | `validation / validation` |
 
-The consumer rulesets remain configured but disabled. Each consumer normally
-uses a branch and pull request, delegates PR checks to `validate.yml@v1`, and
-declares its checks in `.github/release.toml`. Its local pre-commit configuration
-blocks accidental development commits directly to `main`. The shared CI
-validation skips only `no-commit-to-branch` so it can check the default branch.
-These safeguards remain useful even though GitHub does not require consumer PR
-checks server-side.
+Infrastructure and homelab require the Actions `validation / validation` check
+from the GitHub Actions integration before a PR can merge. Their rulesets
+require a pull request, block force pushes and deletion, and have no bypass
+actor. The shared validation workflow remains the sole required check.
 
-The consumer release jobs must keep writing the new version to checked-in
-`pyproject.toml`, committing `chore(release): X.Y.Z` to `main`, tagging that
-commit `vX.Y.Z`, and publishing the GitHub Release. For infrastructure and
-homelab, the tag then starts the existing Ansible deployment. For
-portfolio-website, the tag starts immutable GHCR publication. Its currently
-open [handoff PR](https://github.com/SpencerRWood/portfolio-website/pull/9)
-adds an infrastructure artifact-promotion PR for review. Consumer branch
-protection is disabled so release write-back works without a bypass credential
-or a different release design.
+These two repositories use `release.tag_merged_commit = true`. They are
+configuration repositories, not Python packages. Semantic-release calculates
+the next version from commits, tags the validated merged `main` commit, and
+publishes a GitHub Release without writing to `main`. The Git tag is their
+version source. Deployment checks out that exact tag. Other consumers retain
+the earlier version-file write-back contract until they explicitly opt in.
 
-Infrastructure and homelab retain their separate Renovate update and
-automerge policies. Renovate PRs run the same centralized validation as human
-PRs. Because GitHub does not require that check on consumer branches,
-`platformAutomerge` is disabled and Renovate itself waits for passing checks
-before merging eligible PRs. Approved dependency merges still enter the same
-semantic-release and deployment path. PostgreSQL compatibility-major updates
-remain attended.
-
-Reconsider consumer branch protection if additional human developers gain
-write access, external contributions become common, multiple automated
-identities gain write access, direct-push mistakes recur, GitHub-side
-enforcement becomes more valuable than release write-back simplicity, or the
-release architecture changes to support protected-branch write-back cleanly.
-Branch protection is not required for reusable workflows, Renovate, GHCR,
-GitHub Environments, deployments, or semantic-release itself.
+Infrastructure and homelab retain separate Renovate package rules, but both
+use GitHub platform auto-merge for eligible PRs. GitHub holds the merge until
+required validation succeeds. PostgreSQL compatibility-major updates remain
+manual. Portfolio-website's prepared ruleset remains disabled because its
+release path has not yet adopted a protected-branch-compatible design.

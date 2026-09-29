@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import subprocess
@@ -30,8 +31,14 @@ def is_current(ref: str) -> bool:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--require-current", action="store_true")
+    args = parser.parse_args()
     try:
         current = is_current(os.environ["RELEASE_REF"])
+        if args.require_current and not current:
+            print("release head changed before publication completed", file=sys.stderr)
+            return 1
         with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
             stream.write(f"current={str(current).lower()}\n")
     except (KeyError, ValueError, subprocess.CalledProcessError) as error:
