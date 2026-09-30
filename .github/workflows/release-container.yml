@@ -144,7 +144,8 @@ jobs:
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: |
           set -euo pipefail
-          uv lock --offline
+          # Version preparation may require metadata absent from the runner cache.
+          uv lock
           git add uv.lock
 
       - name: Prepare candidate image references without a GitHub Release
