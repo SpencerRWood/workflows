@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,37 @@ import dagster_runtime  # noqa: E402
 
 
 class DagsterRuntimeTests(unittest.TestCase):
+    def test_cleanup_restores_nested_ownership_without_following_symlinks(self) -> None:
+        image = "ghcr.io/example/app@sha256:" + "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            logs = home / "storage" / "run" / "compute_logs"
+            logs.mkdir(parents=True)
+            (logs / "result.out").write_text("success")
+            (home / "external").symlink_to(home.parent, target_is_directory=True)
+            with patch.object(dagster_runtime, "command") as docker:
+                dagster_runtime.restore_home_ownership(image, home)
+            args = docker.call_args.args
+            self.assertIn(f"type=bind,src={home},dst=/dagster-home", args)
+            self.assertEqual(args[args.index("--user") + 1], "0:0")
+            self.assertEqual(args[args.index("--network") + 1], "none")
+            self.assertEqual(args[-3:-1], (image, "-c"))
+            with patch("os.chown") as chown:
+                exec(args[-1].replace("/dagster-home", str(home)))
+            paths = {call.args[0] for call in chown.call_args_list}
+            self.assertEqual(paths, {
+                str(home), str(home / "storage"), str(home / "storage" / "run"),
+                str(logs), str(logs / "result.out"), str(home / "external"),
+            })
+            for call in chown.call_args_list[1:]:
+                self.assertFalse(call.kwargs["follow_symlinks"])
+
+    def test_cleanup_failure_is_reported(self) -> None:
+        with patch.object(dagster_runtime, "command", side_effect=
+                          subprocess.CalledProcessError(1, ["docker"])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                dagster_runtime.restore_home_ownership("image", Path("/tmp/home"))
+
     def test_instance_uses_postgres_for_all_dagster_storage(self) -> None:
         config = dagster_runtime.instance_yaml()
         self.assertIn("storage:\n  postgres:\n    postgres_db:", config)

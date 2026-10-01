@@ -80,6 +80,34 @@ def run_status(image: str, network: str, home: Path, run_id: str) -> str:
     return result.stdout.strip()
 
 
+def restore_home_ownership(image: str, home: Path) -> None:
+    """Return container-created files to the runner before temporary cleanup."""
+    script = (
+        "import os; "
+        f"uid, gid = {os.getuid()}, {os.getgid()}; "
+        "os.chown('/dagster-home', uid, gid); "
+        "\nfor root, directories, files in os.walk('/dagster-home'):\n"
+        "    for name in directories + files:\n"
+        "        os.chown(os.path.join(root, name), uid, gid, follow_symlinks=False)\n"
+    )
+    command(
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--user",
+        "0:0",
+        "--mount",
+        f"type=bind,src={home},dst=/dagster-home",
+        "--entrypoint",
+        "python",
+        image,
+        "-c",
+        script,
+    )
+
+
 def wait_until(
     phase: str, probe: list[str], timeout: int, *, startup_container: str | None = None
 ) -> None:
@@ -277,9 +305,6 @@ def validate(image: str, smoke_job: str, grpc_port: int, timeout: int) -> None:
             ).stdout.strip()
             if not event_count.isdigit() or int(event_count) == 0:
                 raise PhaseError(f"{phase}: no PostgreSQL event rows for {run_id}")
-            print(
-                f"Dagster runtime PASS: image={image} run={run_id} events={event_count}"
-            )
         except (PhaseError, subprocess.CalledProcessError) as error:
             if isinstance(error, PhaseError) and str(error).startswith(
                 "image startup:"
@@ -306,6 +331,8 @@ def validate(image: str, smoke_job: str, grpc_port: int, timeout: int) -> None:
             for container in (f"dagster-launch-{token}", server, postgres):
                 command("docker", "rm", "-f", container, check=False)
             command("docker", "network", "rm", network, check=False)
+            restore_home_ownership(image, home)
+    print(f"Dagster runtime PASS: image={image} run={run_id} events={event_count}")
 
 
 if __name__ == "__main__":
