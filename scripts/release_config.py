@@ -26,7 +26,7 @@ VALID_CHECKS = frozenset(
     }
 )
 VALID_NODE_CHECKS = frozenset({"lint", "typecheck", "test", "build"})
-TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "container", "release"})
+TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "runtime", "container", "release"})
 TABLE_FIELDS = {
     "project": frozenset({"working_directory"}),
     "python": frozenset({"version", "dependency_group"}),
@@ -36,6 +36,7 @@ TABLE_FIELDS = {
     "node": frozenset({"directory", "version", "checks"}),
     "dbt": frozenset({"profiles_example"}),
     "dagster": frozenset({"runtime_validation", "smoke_job", "grpc_port"}),
+    "runtime": frozenset({"validation", "check_module", "timeout_seconds"}),
     "container": frozenset({"publish", "image_name", "dockerfile", "context", "platforms"}),
     "release": frozenset({"semantic_release", "tag_merged_commit"}),
 }
@@ -154,6 +155,7 @@ def main() -> None:
         "node": mapping(config.get("node", {}), "node"),
         "dbt": mapping(config.get("dbt", {}), "dbt"),
         "dagster": mapping(config.get("dagster", {}), "dagster"),
+        "runtime": mapping(config.get("runtime", {}), "runtime"),
         "container": mapping(config.get("container", {}), "container"),
         "release": release,
     }.items():
@@ -205,6 +207,24 @@ def main() -> None:
     grpc_port = dagster.get("grpc_port", 4000)
     if isinstance(grpc_port, bool) or not isinstance(grpc_port, int) or not 1 <= grpc_port <= 65535:
         fail("dagster.grpc_port must be an integer from 1 to 65535.")
+    runtime = mapping(config.get("runtime", {}), "runtime")
+    if runtime and "validation" not in runtime:
+        fail("runtime.validation is required when [runtime] is present.")
+    runtime_validation = boolean(runtime.get("validation"), "runtime.validation")
+    runtime_module = string(runtime.get("check_module"), "runtime.check_module", "")
+    runtime_timeout = runtime.get("timeout_seconds", 120)
+    if type(runtime_timeout) is not int or not 10 <= runtime_timeout <= 300:
+        fail("runtime.timeout_seconds must be an integer from 10 to 300.")
+    if runtime_validation:
+        if not container_publish:
+            fail("runtime.validation requires container.publish = true.")
+        if dagster_runtime_validation:
+            fail("runtime.validation and dagster.runtime_validation are mutually exclusive.")
+        if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", runtime_module):
+            fail("runtime.check_module must be a dotted Python module name.")
+        module_path = Path(*runtime_module.split(".")).with_suffix(".py")
+        if not any((python_root / directory / module_path).is_file() for directory in ("src", ".")):
+            fail("runtime.check_module must identify a repository-owned Python module.")
     coverage = mapping(config.get("coverage", {}), "coverage")
     coverage_target = string(coverage.get("target"), "coverage.target", "")
     if "pytest-coverage" in checks and not coverage_target:
@@ -246,6 +266,9 @@ def main() -> None:
     emit("container_platforms", container_platforms)
     emit("dagster_smoke_job", smoke_job)
     emit("dagster_grpc_port", str(grpc_port))
+    emit("runtime_validation", runtime_validation)
+    emit("runtime_check_module", runtime_module)
+    emit("runtime_timeout_seconds", str(runtime_timeout))
     emit("coverage_target", coverage_target)
     emit("node_enabled", node_enabled)
     emit("node_directory", node_directory)
