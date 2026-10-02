@@ -222,6 +222,14 @@ jobs:
           GRPC_PORT: ${{ steps.config.outputs.dagster_grpc_port }}
         run: python3 "$RUNNER_TEMP/workflow-contract/scripts/dagster_runtime.py" "$IMAGE" --smoke-job "$SMOKE_JOB" --grpc-port "$GRPC_PORT"
 
+      - name: Validate exact application candidate digest
+        if: steps.version.outputs.release_tag != '' && steps.config.outputs.runtime_validation == 'true'
+        env:
+          IMAGE: ${{ steps.image.outputs.image_repository }}@${{ steps.digest.outputs.digest }}
+          CHECK_MODULE: ${{ steps.config.outputs.runtime_check_module }}
+          TIMEOUT_SECONDS: ${{ steps.config.outputs.runtime_timeout_seconds }}
+        run: python3 "$RUNNER_TEMP/workflow-contract/scripts/application_runtime.py" "$IMAGE" --check-module "$CHECK_MODULE" --timeout "$TIMEOUT_SECONDS"
+
       - name: Publish the validated digest under release image tags
         if: steps.version.outputs.release_tag != ''
         env:

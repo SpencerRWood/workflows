@@ -469,3 +469,28 @@ It has no public workflow inputs. It uses the automatic `GITHUB_TOKEN` for
 semantic-release and exposes `released` and `release_tag` outputs to gate the
 consumer's existing deployment job. Container publishing and infrastructure
 provisioning are outside this release contract.
+# Repository-owned application runtime checks
+
+Container consumers of `release-container.yml@v3` can opt into an additive gate:
+
+```toml
+[runtime]
+validation = true
+check_module = "your_package.runtime_check"
+timeout_seconds = 120
+```
+
+The module must belong to the consumer and be installed in its candidate image.
+The shared helper runs `python -m <check_module>` in the exact verified candidate
+digest against disposable PostgreSQL 16. It supplies `RUNTIME_DATABASE_URL` and
+an isolated internal Docker network, with no production credentials or volumes.
+The consumer owns migrations, startup, authentication and persistence assertions;
+a nonzero exit or timeout fails the release before release image tags, Git tags,
+or a GitHub Release are published. Candidate tags necessarily exist before the
+gate. The total runtime has a configured 10–300 second deadline, followed by
+bounded cleanup. Existing Dagster and non-runtime consumers retain their paths;
+the two runtime modes cannot be enabled together.
+
+To diagnose a local candidate, pass an immutable local image ID with the explicit
+`--allow-local-image` option. Publication continues to require a GHCR digest.
+Consumer adoption requires publishing this shared contract to v3 first.

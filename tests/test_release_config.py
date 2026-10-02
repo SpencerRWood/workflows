@@ -319,6 +319,36 @@ semantic_release = true
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsupported capability", result.stderr)
 
+    def test_application_runtime_opt_in(self) -> None:
+        config = '''version = 1
+[python]
+[validation]
+checks = ["pytest"]
+[container]
+publish = true
+[runtime]
+validation = true
+check_module = "sample.check"
+timeout_seconds = 60
+[release]
+semantic_release = true
+'''
+        result, outputs = self.run_config(config, ("Dockerfile", "src/sample/check.py"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("runtime_validation=true", outputs)
+        self.assertIn("runtime_check_module=sample.check", outputs)
+        for old, new in (
+            ('timeout_seconds = 60', 'timeout_seconds = 0'),
+            ('check_module = "sample.check"', 'check_module = "unsafe; command"'),
+            ('publish = true', 'publish = false'),
+        ):
+            with self.subTest(new=new):
+                rejected, _ = self.run_config(config.replace(old, new), ("Dockerfile", "src/sample/check.py"))
+                self.assertNotEqual(rejected.returncode, 0)
+        missing, _ = self.run_config(config, ("Dockerfile",))
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("repository-owned", missing.stderr)
+
     def test_invalid_toml_fails_clearly(self) -> None:
         result, _ = self.run_config("version = [\n")
         self.assertNotEqual(result.returncode, 0)
