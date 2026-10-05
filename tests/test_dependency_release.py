@@ -64,16 +64,7 @@ class DependencyReleaseTests(unittest.TestCase):
     def test_shared_workflow_uses_generated_config(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("scripts/semantic_release_config.py", workflow)
-        self.assertIn('semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release', workflow)
-        self.assertNotIn("uv lock --offline", workflow)
-        stages = (
-            "version --no-commit --no-tag --no-push --no-vcs-release --skip-build",
-            "              uv lock\n",
-            "git add uv.lock",
-            'version --vcs-release "${release_options[@]}"',
-        )
-        self.assertEqual(list(map(workflow.index, stages)), sorted(map(workflow.index, stages)))
-        self.assertIn("if [[ \"${{ steps.config.outputs.tag_merged_commit }}\" != 'true' ]]; then", workflow)
+        self.assertIn('scripts/release_publish.py" "$RUNNER_TEMP/semantic-release-config.json"', workflow)
 
     def test_tag_only_release_tags_validated_head_without_source_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

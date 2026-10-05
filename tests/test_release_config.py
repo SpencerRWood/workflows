@@ -273,10 +273,11 @@ semantic_release = true
         )
         self.assertIn("working-directory: ${{ steps.config.outputs.node_directory }}", workflow)
 
-    def test_public_workflow_contract_has_no_inputs(self) -> None:
+    def test_public_workflow_contract_has_optional_recovery_input(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("on:\n  workflow_call:", workflow)
-        self.assertNotIn("workflow_call:\n    inputs:", workflow)
+        self.assertIn("workflow_call:\n    inputs:\n      recovery_tag:", workflow)
+        self.assertIn("default: ''\n        required: false", workflow)
 
     def test_release_calls_the_same_validation_contract_as_pull_requests(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
