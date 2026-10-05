@@ -61,6 +61,55 @@ semantic_release = true
         self.assertIn("dagster_runtime_validation=false", outputs)
         self.assertIn("container_publish=false", outputs)
 
+    def test_delivery_metadata_preserves_existing_workflow_outputs(self) -> None:
+        config = '''version = 1
+[python]
+[validation]
+checks = ["pytest", "pre-commit"]
+[release]
+semantic_release = true
+tag_merged_commit = true
+'''
+        baseline, baseline_outputs = self.run_config(config)
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        expected = dict(line.split("=", 1) for line in baseline_outputs.splitlines())
+        for policy in (
+            "[delivery]\n",
+            "[delivery]\ncontainer_image = false\n",
+            "[delivery]\ncontainer_image = false\ninfrastructure_promotion = false\nruntime_verification = true\n",
+            "[delivery]\ncontainer_image = true\ninfrastructure_promotion = true\nruntime_verification = false\n",
+        ):
+            with self.subTest(policy=policy):
+                result, outputs = self.run_config(config + policy)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(dict(line.split("=", 1) for line in outputs.splitlines()), expected)
+
+    def test_delivery_metadata_rejects_unknown_fields_and_non_booleans(self) -> None:
+        config = '''version = 1
+[python]
+[validation]
+checks = ["pre-commit"]
+[release]
+semantic_release = true
+'''
+        for field in ("container_image", "infrastructure_promotion", "runtime_verification"):
+            for value in ('"false"', "0", "[]", "{enabled = false}"):
+                with self.subTest(field=field, value=value):
+                    result, outputs = self.run_config(config + f"[delivery]\n{field} = {value}\n")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"delivery.{field} must be true or false", result.stderr)
+                    self.assertEqual(outputs, "")
+        result, outputs = self.run_config(config + "[delivery]\nunknown = false\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[delivery] contains unsupported fields", result.stderr)
+        self.assertEqual(outputs, "")
+        for value in ("false", "[]"):
+            with self.subTest(section=value):
+                result, outputs = self.run_config(f"delivery = {value}\n" + config)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("[delivery] must be a TOML table", result.stderr)
+                self.assertEqual(outputs, "")
+
     def test_tag_merged_commit_is_limited_to_non_packages(self) -> None:
         config = '''version = 1
 [python]

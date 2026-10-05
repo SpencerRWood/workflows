@@ -264,6 +264,7 @@ Each consumer owns `.github/release.toml`. Schema version 1 has these tables:
 | `[validation]` | `checks` | A non-empty list of declared validation capabilities. |
 | `[coverage]` | `target` when selected | Declares the package/module measured by `pytest-coverage`. |
 | `[release]` | `semantic_release = true` | Keeps semantic-release mandatory for this release contract. |
+| `[delivery]` | Optional boolean `container_image`, `infrastructure_promotion`, `runtime_verification` | Consumer evidence applicability for Wood Tools; omitted fields retain its required defaults. Does not change workflow checks, publication, deployment, or runtime gates. |
 | `[project]` | none | Repository-relative `working_directory` (default `.`). |
 | `[build]` | none | `python_package = true` enables `uv build`. |
 | `[node]` | all fields when present | Enables locked npm setup and Node checks. |

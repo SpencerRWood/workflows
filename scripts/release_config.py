@@ -26,7 +26,7 @@ VALID_CHECKS = frozenset(
     }
 )
 VALID_NODE_CHECKS = frozenset({"lint", "typecheck", "test", "build"})
-TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "container", "release"})
+TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "container", "release", "delivery"})
 TABLE_FIELDS = {
     "project": frozenset({"working_directory"}),
     "python": frozenset({"version", "dependency_group"}),
@@ -38,6 +38,7 @@ TABLE_FIELDS = {
     "dagster": frozenset({"runtime_validation", "smoke_job", "grpc_port"}),
     "container": frozenset({"publish", "image_name", "dockerfile", "context", "platforms"}),
     "release": frozenset({"semantic_release", "tag_merged_commit"}),
+    "delivery": frozenset({"container_image", "infrastructure_promotion", "runtime_verification"}),
 }
 
 
@@ -145,6 +146,7 @@ def main() -> None:
     python = mapping(config.get("python"), "python")
     validation = mapping(config.get("validation"), "validation")
     release = mapping(config.get("release"), "release")
+    delivery = mapping(config.get("delivery", {}), "delivery")
     for table_name, table in {
         "project": project,
         "python": python,
@@ -156,8 +158,14 @@ def main() -> None:
         "dagster": mapping(config.get("dagster", {}), "dagster"),
         "container": mapping(config.get("container", {}), "container"),
         "release": release,
+        "delivery": delivery,
     }.items():
         validate_table_fields(table, table_name)
+
+    # Delivery evidence policy belongs to the consumer/Wood Tools. Validate its
+    # additive metadata without changing any release, validation or runtime gate.
+    for field in TABLE_FIELDS["delivery"]:
+        boolean(delivery.get(field), f"delivery.{field}", True)
 
     working_directory = relative_directory(
         string(project.get("working_directory"), "project.working_directory", "."),
