@@ -101,7 +101,11 @@ The application template owns its compatible Dagster, `dagster-postgres`,
 SQLAlchemy, and psycopg2 dependency set and exposes the secret-free smoke job
 through `Definitions`. The centralized container workflow owns temporary
 PostgreSQL, a standard PostgreSQL-backed `dagster.yaml`, candidate gRPC startup,
-the real smoke run, and direct PostgreSQL run/event row checks. Infrastructure
+the real smoke run, and direct PostgreSQL run/event row checks. The disposable
+database uses `pgvector/pgvector:pg16`, retaining PostgreSQL 16 and making the
+vector extension available for consumer-owned application smoke fixtures.
+Consumers still own extension creation in their disposable schemas/database;
+the gate does not weaken run or event-log verification. Infrastructure
 owns the deployed code-location configuration. This gate checks the
 Dagster/PostgreSQL runtime boundary; it does not exercise application APIs.
 

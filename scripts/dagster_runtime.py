@@ -14,7 +14,8 @@ import time
 import uuid
 from pathlib import Path
 
-POSTGRES_IMAGE = "postgres:16-alpine"
+# Preserve PostgreSQL 16 while supporting consumers whose smoke fixture uses vectors.
+POSTGRES_IMAGE = "pgvector/pgvector:pg16"
 DB_USER = "dagster_ci"
 DB_PASSWORD = "dagster_ci_only"
 DB_NAME = "dagster_ci"
