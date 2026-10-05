@@ -231,7 +231,12 @@ def publish(
         if not tag_merged_commit
         else None
     )
-    if expected and version is None:
+    head_tag = (
+        config.get("tag_format", "v{version}").format(version=version)
+        if version
+        else None
+    )
+    if expected and expected != head_tag:
         # A repaired consumer may have advanced main since the release completed.
         # Reconcile a fully published ancestor without any publication mutation.
         target = remote_tag(expected)
