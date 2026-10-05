@@ -206,6 +206,20 @@ class PublicationTests(unittest.TestCase):
             self.run_publish("v0.19.0")
         self.assertFalse(any(call[0] == "changelog" for call in self.calls))
 
+    def test_published_ancestor_can_be_verified_from_newer_version_commit(self) -> None:
+        revision = self.version_commit()
+        self.git("tag", "v0.19.0")
+        self.git("push", "origin", "refs/tags/v0.19.0")
+        self.published = {"id": 1, "tag_name": "v0.19.0"}
+        self.metadata("0.19.1")
+        self.git("commit", "-am", self.message.format(version="0.19.1"))
+        self.git("push", "origin", "main")
+        head = self.git("rev-parse", "HEAD")
+        self.assertEqual(self.run_publish("v0.19.0"), (True, "v0.19.0"))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(publication.remote_tag("v0.19.0"), revision)
+
     def test_real_psr_recovery_creates_same_tag_without_new_version_commit(
         self,
     ) -> None:
