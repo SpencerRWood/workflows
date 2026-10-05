@@ -470,10 +470,66 @@ keeps the newest pending run when more commits arrive. Immediately before
 semantic-release, the shared workflow compares its validated checkout with the
 remote branch and skips a superseded run. The newest pending run then validates
 and releases the accumulated changes on main.
-It has no public workflow inputs. It uses the automatic `GITHUB_TOKEN` for
+It accepts an optional `recovery_tag` input. It uses the automatic `GITHUB_TOKEN` for
 semantic-release and exposes `released` and `release_tag` outputs to gate the
 consumer's existing deployment job. Container publishing and infrastructure
 provisioning are outside this release contract.
+
+### Partial release recovery
+
+If semantic-release pushes a version commit and then fails to push its tag or
+create its GitHub release, dispatch a **fresh Release run on main**. The consumer
+must expose `workflow_dispatch` and pass its optional `recovery_tag` string to
+`release.yml@v1`; set it to the expected tag (for example `v0.19.0`) to fail on
+an unintended version. A `GITHUB_TOKEN` version push does not start a new push
+workflow. Rerunning the old application checkout still skips publication because
+it is superseded. The fresh run validates the version commit through the same
+required validation job before publication, using the current reusable workflow.
+
+Recovery requires the remote branch to equal the validated checkout, a
+single-parent version commit matching the configured semantic-release commit
+message, declared TOML version values matching that message, and changes limited
+to declared version metadata, changelog, and `uv.lock`. Semantic-release's
+print-only version calculation in an isolated checkout of the parent must predict
+the same tag. Version-variable/custom-template recovery fails explicitly when
+this provenance cannot be verified; it never guesses. Dynamic `tag_merged_commit`
+consumers can recover a missing GitHub release at their exact validated tag target
+by supplying `recovery_tag`.
+
+When the tag is absent, semantic-release resumes with `version --no-commit
+--no-changelog --skip-build --vcs-release`. When the tag exists at the intended
+revision but its release is absent, semantic-release uses `changelog
+--post-to-release-tag`. Conflicting tag targets, draft releases, an orphan release,
+ambiguous local tags, version disagreement, or changed branch heads fail before
+publication. Application changes after a partial version commit require diagnosis;
+recovery never resets to newer main or publishes a superseded revision.
+
+Only explicit HTTP 429/502/503/504 failures in release-note publication and
+release lookup receive up to three attempts, with bounded backoff. Generic tag
+rejection, authentication, permission, and conflict errors fail without retry.
+After publication, the remote tag's peeled revision, current branch head, and
+published GitHub release are verified. Python semantic-release's optimistic
+Actions outputs are suppressed. A successfully reconciled release returns
+`released=true` and the accurate `release_tag`, including repeated recovery;
+repeated recovery creates neither another version nor duplicate publication.
+An ordinary checkout with no new semantic version returns `released=false`.
+An explicitly requested, already published ancestor release can also be verified
+after the consumer wrapper advances main. Its tag target, ancestry, version
+metadata, and parent-derived intent are checked without publication mutation.
+A missing release at an older application revision is not published from newer
+main.
+
+Historical Wood Tools failure (Story 516, PR #54): run 37346540999 attempt 1
+pushed version commit `84a277b43427aafdbe5a51e977f270491fa20c2b`, then job
+111886682263 reported `remote rejected ... (failed)` for `v0.19.0`. The retained
+job diagnostic provides no server reason. No repository rulesets were returned
+by the focused inspection; this does not establish the cause of the rejection.
+The confirmed defect was the lack of a freshly validated workflow recovery path.
+During repair inspection on 2026-10-05, the tag and published release were already
+present at the intended revision; a repeated dispatch should verify them without
+republication after the repaired workflow is delivered.
+By 17:58 UTC, Wood Tools delivery reconciliation reported the release delivered
+and run 37346540999 attempt 2 successful; Story 516 was already Closed.
 # Repository-owned application runtime checks
 
 Container consumers of `release-container.yml@v3` can opt into an additive gate:
