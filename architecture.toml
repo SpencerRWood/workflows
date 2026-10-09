@@ -1,0 +1,4 @@
+[architecture]
+domain = "engineering"
+capability = "release-promotion"
+kind = "workflow-library"
