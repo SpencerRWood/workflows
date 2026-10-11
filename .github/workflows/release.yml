@@ -3,6 +3,21 @@ name: Release
 on:
   workflow_call:
     inputs:
+      workflow_revision:
+        description: Shared helper revision; pin to the same SHA as this workflow.
+        type: string
+        required: false
+        default: v1
+      require_approval:
+        description: Require separately authorized manual publication on main.
+        type: boolean
+        default: false
+        required: false
+      approved:
+        description: Explicit publication authorization for this dispatch.
+        type: boolean
+        default: false
+        required: false
       recovery_tag:
         description: Expected partial release tag at the freshly validated branch head.
         type: string
@@ -44,8 +59,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorization:
+    uses: ./.github/workflows/authorize-operation.yml
+    with:
+      require_approval: ${{ inputs.require_approval }}
+      approved: ${{ inputs.approved }}
+
   validation:
-    uses: SpencerRWood/workflows/.github/workflows/validate.yml@v1
+    needs: authorization
+    uses: ./.github/workflows/validate.yml
+    with:
+      workflow_revision: ${{ inputs.workflow_revision }}
     secrets:
       dbt_host: ${{ secrets.dbt_host }}
       dbt_user: ${{ secrets.dbt_user }}
@@ -74,8 +98,8 @@ jobs:
         # Keep helper code outside the consumer checkout so repository tools
         # cannot scan it as application code.
         env:
-          # job.workflow_sha identifies this reusable workflow, not the caller.
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          # The caller pins helpers independently of its own repository revision.
+          WORKFLOW_SHA: ${{ inputs.workflow_revision }}
         run: |
           git init "$RUNNER_TEMP/workflow-contract"
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git

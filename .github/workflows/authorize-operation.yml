@@ -1,0 +1,39 @@
+name: Authorize release operation
+
+on:
+  workflow_call:
+    inputs:
+      require_approval:
+        description: Opt into explicit main-branch manual authorization.
+        required: false
+        type: boolean
+        default: true
+      approved:
+        description: Caller confirms separate authorization for this operation.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject unauthorized operation before acquiring runtime credentials
+        env:
+          REQUIRE_APPROVAL: ${{ inputs.require_approval }}
+          APPROVED: ${{ inputs.approved }}
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$REQUIRE_APPROVAL" == false ]]; then exit 0; fi
+          if [[ "$REQUIRE_APPROVAL" != true || "$APPROVED" != true ||
+                "$CALLER_EVENT" != workflow_dispatch ||
+                "$CALLER_REF" != refs/heads/main ]]; then
+            echo 'Operation requires an authorized manual dispatch on main.' >&2
+            exit 1
+          fi

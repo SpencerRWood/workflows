@@ -3,6 +3,16 @@ name: Deploy Ansible release
 on:
   workflow_call:
     inputs:
+      require_approval:
+        description: Require separately authorized manual deployment on main.
+        type: boolean
+        default: false
+        required: false
+      approved:
+        description: Explicit deployment authorization for this dispatch.
+        type: boolean
+        default: false
+        required: false
       repository:
         description: Repository containing the release to deploy.
         required: true
@@ -104,7 +114,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorization:
+    uses: ./.github/workflows/authorize-operation.yml
+    with:
+      require_approval: ${{ inputs.require_approval }}
+      approved: ${{ inputs.approved }}
+
   deploy:
+    needs: authorization
     name: Deploy ${{ inputs.ref }} to ${{ inputs.environment_name }}
     runs-on: ${{ fromJSON(inputs.runner) }}
     environment: ${{ inputs.environment_name }}
