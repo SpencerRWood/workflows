@@ -19,6 +19,8 @@ def main() -> None:
     with args.pyproject.open("rb") as stream:
         pyproject = tomllib.load(stream)
     config = pyproject["tool"]["semantic_release"]
+    # Enforce publication policy centrally without rewriting consumer repositories.
+    config["branches"] = {"main": {"match": "^main$", "prerelease": False}}
     if args.tag_merged_commit:
         project = pyproject.get("project", {})
         if "version" in project or "version" not in project.get("dynamic", []):

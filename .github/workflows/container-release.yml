@@ -68,6 +68,7 @@ concurrency:
 jobs:
   publish:
     name: Publish ${{ inputs.release_tag }}
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     outputs:
       image_repository: ${{ steps.prepare.outputs.image_repository }}

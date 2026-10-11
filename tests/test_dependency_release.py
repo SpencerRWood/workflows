@@ -39,7 +39,7 @@ class DependencyReleaseTests(unittest.TestCase):
                 self.assertIsNotNone(result)
                 self.assertEqual(result.bump, expected)
 
-    def test_consumer_config_is_preserved_except_parser(self) -> None:
+    def test_consumer_config_preserves_versioning_and_enforces_main_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             pyproject = root / "pyproject.toml"
@@ -47,7 +47,8 @@ class DependencyReleaseTests(unittest.TestCase):
                 '[tool.semantic_release]\ncommit_parser = "conventional"\n'
                 'tag_format = "v{version}"\nversion_toml = ["pyproject.toml:project.version"]\n'
                 '[tool.semantic_release.commit_parser_options]\n'
-                'minor_tags = ["feat"]\npatch_tags = ["fix", "perf"]\n',
+                'minor_tags = ["feat"]\npatch_tags = ["fix", "perf"]\n'
+                '[tool.semantic_release.branches.unsafe]\nmatch = ".*"\nprerelease = false\n',
                 encoding="utf-8",
             )
             output = root / "release.json"
@@ -60,6 +61,7 @@ class DependencyReleaseTests(unittest.TestCase):
             self.assertEqual(config["version_toml"], ["pyproject.toml:project.version"])
             self.assertEqual(config["commit_parser_options"]["patch_tags"], ["fix", "perf"])
             self.assertTrue(config["commit_parser"].endswith("dependency_release_parser.py:DependencyReleaseParser"))
+            self.assertEqual(config["branches"], {"main": {"match": "^main$", "prerelease": False}})
 
     def test_shared_workflow_uses_generated_config(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

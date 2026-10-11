@@ -2,8 +2,10 @@
 
 Development strategy and lifecycle gates are defined in the
 [canonical branching policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md).
-`workflows`, `infrastructure` and `homelab` remain trunk-based; application Story
-PRs target their approved release integration branch. Existing protections below
+`workflows`, `infrastructure` and `homelab` remain trunk-based; adopted application Story
+PRs target their approved release integration branch. Nonadopters retain existing
+conventions. See [central safeguards and caller adoption dependencies](release-branch-adoption.md).
+Existing protections below
 remain additional requirements. Release-branch protection needs a separate rollout;
 this record does not attest that those rulesets exist.
 
