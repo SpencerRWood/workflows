@@ -80,6 +80,7 @@ jobs:
 
   release:
     name: Release after validation
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validation
     runs-on: ubuntu-latest
     outputs:

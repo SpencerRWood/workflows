@@ -7,7 +7,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+from release_head import is_current
 
 
 ROOT = Path(__file__).parents[1]
@@ -21,6 +25,14 @@ def git(directory: Path, *args: str) -> str:
 
 
 class ReleaseHeadTests(unittest.TestCase):
+    def test_nonpublishing_refs_are_rejected_before_git_access(self) -> None:
+        for ref in ("refs/heads/feat/op-123-story", "refs/heads/fix/op-125-story",
+                    "refs/heads/release/v1.2.3", "refs/pull/123/merge", "refs/tags/v1.2.3"):
+            with self.subTest(ref=ref), patch("release_head.subprocess.check_output") as command:
+                with self.assertRaisesRegex(ValueError, "requires refs/heads/main"):
+                    is_current(ref)
+                command.assert_not_called()
+
     def test_newer_main_supersedes_validated_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

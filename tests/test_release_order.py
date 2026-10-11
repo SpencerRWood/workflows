@@ -14,6 +14,19 @@ NON_CONTAINER = (ROOT / ".github/workflows/release.yml").read_text()
 
 
 class ReleaseOrderTests(unittest.TestCase):
+    def test_all_publishing_jobs_are_main_only_and_validation_is_branch_agnostic(self) -> None:
+        guard = "if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
+        for name in ("release.yml", "release-container.yml", "container-release.yml"):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text()
+                self.assertIn(guard, workflow)
+                self.assertLess(workflow.index(guard), workflow.index("runs-on:"))
+        validation = (ROOT / ".github/workflows/validate.yml").read_text()
+        self.assertIn("workflow_call:", validation)
+        self.assertNotIn("github.ref == 'refs/heads/main'", validation)
+        self.assertNotIn("docker/build-push-action", validation)
+        self.assertNotIn("version --vcs-release", validation)
+
     def test_release_tagging_shell_uses_the_validated_digest(self) -> None:
         marker = "      - name: Publish the validated digest under release image tags"
         stage = INTEGRATED.split(marker, 1)[1]

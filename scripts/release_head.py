@@ -15,8 +15,8 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 def is_current(ref: str) -> bool:
     """Compare the checked-out commit with the authoritative remote branch."""
-    if not ref.startswith("refs/heads/"):
-        raise ValueError(f"release ref must be a branch: {ref!r}")
+    if ref != "refs/heads/main":
+        raise ValueError(f"release publication requires refs/heads/main: {ref!r}")
     local = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     remote_line = subprocess.check_output(
         ["git", "ls-remote", "--exit-code", "origin", ref], text=True

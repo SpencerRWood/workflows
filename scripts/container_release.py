@@ -39,6 +39,11 @@ def local_path(root: Path, value: str, *, directory: bool) -> Path:
 
 def prepare(environment: dict[str, str], *, require_release: bool = True) -> dict[str, str]:
     """Derive image references; optionally verify an already published release."""
+    if require_release and (
+        environment.get("GITHUB_REF") != "refs/heads/main"
+        or environment.get("GITHUB_EVENT_NAME") not in {"push", "workflow_dispatch"}
+    ):
+        raise ValueError("container publication requires a main push or approved main dispatch")
     tag = environment.get("RELEASE_TAG", "")
     if not RELEASE_TAG.fullmatch(tag):
         raise ValueError(

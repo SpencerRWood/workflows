@@ -41,6 +41,8 @@ class ContainerReleaseTests(unittest.TestCase):
         )
         subprocess.run(["git", "-C", str(self.root), "tag", "v1.2.3"], check=True)
         self.environment = {
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_EVENT_NAME": "push",
             "RELEASE_TAG": "v1.2.3",
             "GITHUB_REPOSITORY": "SpencerRWood/Website-Portfolio",
             "GITHUB_WORKSPACE": str(self.root),
@@ -82,6 +84,19 @@ class ContainerReleaseTests(unittest.TestCase):
         self.assertEqual(
             result["sha_image"], f"ghcr.io/spencerrwood/website-portfolio:sha-{sha}"
         )
+
+    def test_nonpublishing_contexts_rejected_before_git_or_github(self) -> None:
+        for ref, event in (
+            ("refs/heads/release/v1.2.3", "push"),
+            ("refs/heads/feat/op-499-test", "workflow_dispatch"),
+            ("refs/pull/9/merge", "pull_request"),
+            ("refs/heads/main", "pull_request_target"),
+            ("refs/heads/main", "workflow_run"),
+        ):
+            with self.subTest(ref=ref, event=event), patch.object(container_release, "command") as command:
+                with self.assertRaisesRegex(ValueError, "publication requires"):
+                    container_release.prepare({**self.environment, "GITHUB_REF": ref, "GITHUB_EVENT_NAME": event})
+                command.assert_not_called()
 
     def test_candidate_preparation_needs_no_git_tag_or_github_release(self) -> None:
         subprocess.run(["git", "-C", str(self.root), "tag", "-d", "v1.2.3"], check=True, capture_output=True)
