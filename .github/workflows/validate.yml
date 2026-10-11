@@ -3,6 +3,11 @@ name: Validate
 on:
   workflow_call:
     inputs:
+      workflow_revision:
+        description: Shared helper revision; pin to the same SHA as this workflow.
+        type: string
+        required: false
+        default: v1
       publish_commit_status:
         description: Mirror PR validation into a commit status for cross-repository consumers.
         required: false
@@ -42,8 +47,8 @@ jobs:
         # Keep helper code outside the consumer checkout so repository tools
         # cannot scan it as application code.
         env:
-          # job.workflow_sha identifies this reusable workflow, not the caller.
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          # The caller pins helpers independently of its own repository revision.
+          WORKFLOW_SHA: ${{ inputs.workflow_revision }}
         run: |
           git init "$RUNNER_TEMP/workflow-contract"
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git

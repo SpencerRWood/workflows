@@ -256,7 +256,7 @@ semantic_release = true
 
     def test_helper_checkout_is_outside_consumer_workspace(self) -> None:
         workflow = VALIDATION_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("WORKFLOW_SHA: ${{ job.workflow_sha }}", workflow)
+        self.assertIn("WORKFLOW_SHA: ${{ inputs.workflow_revision }}", workflow)
         self.assertNotIn("WORKFLOW_SHA: ${{ github.workflow_sha }}", workflow)
         self.assertIn('git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"', workflow)
         self.assertIn(
@@ -276,12 +276,13 @@ semantic_release = true
     def test_public_workflow_contract_has_optional_recovery_input(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("on:\n  workflow_call:", workflow)
-        self.assertIn("workflow_call:\n    inputs:\n      recovery_tag:", workflow)
+        self.assertIn("      recovery_tag:", workflow)
         self.assertIn("default: ''\n        required: false", workflow)
 
     def test_release_calls_the_same_validation_contract_as_pull_requests(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("uses: SpencerRWood/workflows/.github/workflows/validate.yml@v1", workflow)
+        self.assertIn("uses: ./.github/workflows/validate.yml", workflow)
+        self.assertIn("workflow_revision: ${{ inputs.workflow_revision }}", workflow)
         self.assertIn("needs: validation", workflow)
 
     def test_compose_capability_is_exposed(self) -> None:
