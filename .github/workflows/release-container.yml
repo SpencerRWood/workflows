@@ -48,6 +48,7 @@ jobs:
       dbt_schema: ${{ secrets.dbt_schema }}
 
   release:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validation
     runs-on: ubuntu-latest
     permissions:

@@ -1,5 +1,12 @@
 # Main branch policy
 
+Development strategy and lifecycle gates are defined in the
+[canonical branching policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md).
+`workflows`, `infrastructure` and `homelab` remain trunk-based; application Story
+PRs target their approved release integration branch. Existing protections below
+remain additional requirements. Release-branch protection needs a separate rollout;
+this record does not attest that those rulesets exist.
+
 This is an intentional single-developer policy. `workflows` is the high-trust
 CI/CD control-plane repository: changes there affect multiple consumers. Its
 `main` ruleset is active and requires a pull request and the GitHub Actions
@@ -23,7 +30,11 @@ These two repositories use `release.tag_merged_commit = true`. They are
 configuration repositories, not Python packages. Semantic-release calculates
 the next version from commits, tags the validated merged `main` commit, and
 publishes a GitHub Release without writing to `main`. The Git tag is their
-version source. Deployment checks out that exact tag. Other consumers retain
+version source. Deployment checks out that exact tag. Automatic main-merge
+publication and deployment in these trunk repositories are a gap against the
+separate lifecycle gates: agents must obtain separate authorization before a
+merge that triggers them. Normal Story approval does not authorize those stages.
+Other consumers retain
 the earlier version-file write-back contract until they explicitly opt in.
 
 Infrastructure and homelab retain separate Renovate package rules, but both
