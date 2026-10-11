@@ -2,6 +2,22 @@ name: Validate and publish container release
 
 on:
   workflow_call:
+    inputs:
+      workflow_revision:
+        description: Shared helper revision; pin to the same SHA as this workflow.
+        type: string
+        required: false
+        default: v3
+      require_approval:
+        description: Require separately authorized manual publication on main.
+        type: boolean
+        default: false
+        required: false
+      approved:
+        description: Explicit publication authorization for this dispatch.
+        type: boolean
+        default: false
+        required: false
     outputs:
       released:
         value: ${{ jobs.release.outputs.released }}
@@ -37,8 +53,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorization:
+    uses: ./.github/workflows/authorize-operation.yml
+    with:
+      require_approval: ${{ inputs.require_approval }}
+      approved: ${{ inputs.approved }}
+
   validation:
-    uses: SpencerRWood/workflows/.github/workflows/validate.yml@v3
+    needs: authorization
+    uses: ./.github/workflows/validate.yml
+    with:
+      workflow_revision: ${{ inputs.workflow_revision }}
     secrets:
       dbt_host: ${{ secrets.dbt_host }}
       dbt_user: ${{ secrets.dbt_user }}
@@ -68,7 +93,7 @@ jobs:
 
       - name: Check out workflow implementation
         env:
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_SHA: ${{ inputs.workflow_revision }}
         run: |
           git init "$RUNNER_TEMP/workflow-contract"
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git

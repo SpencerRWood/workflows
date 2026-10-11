@@ -6,6 +6,21 @@ name: Publish release container
 on:
   workflow_call:
     inputs:
+      workflow_revision:
+        description: Shared helper revision; pin to the same SHA as this workflow.
+        type: string
+        required: false
+        default: v1
+      require_approval:
+        description: Require separately authorized manual publication on main.
+        type: boolean
+        default: false
+        required: false
+      approved:
+        description: Explicit publication authorization for this dispatch.
+        type: boolean
+        default: false
+        required: false
       release_tag:
         description: Published semantic release tag (for example v1.2.3).
         required: true
@@ -66,7 +81,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorization:
+    uses: ./.github/workflows/authorize-operation.yml
+    with:
+      require_approval: ${{ inputs.require_approval }}
+      approved: ${{ inputs.approved }}
+
   publish:
+    needs: authorization
     name: Publish ${{ inputs.release_tag }}
     runs-on: ubuntu-latest
     outputs:
@@ -85,8 +107,8 @@ jobs:
 
       - name: Check out workflow implementation
         env:
-          # job.workflow_sha identifies this reusable workflow, not the caller.
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          # The caller pins helpers independently of its own repository revision.
+          WORKFLOW_SHA: ${{ inputs.workflow_revision }}
         run: |
           git init "$RUNNER_TEMP/workflow-contract"
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
