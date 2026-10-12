@@ -43,8 +43,8 @@ class OperationAuthorizationTests(unittest.TestCase):
         for name in ('release.yml', 'release-container.yml', 'container-release.yml', 'deploy-ansible.yml'):
             jobs = workflow(ROOT, name)['jobs']
             self.assertEqual(jobs['authorization']['uses'], './.github/workflows/authorize-operation.yml')
-            self.assertEqual(jobs['authorization']['with'], {
-                'require_approval': '${{ inputs.require_approval }}', 'approved': '${{ inputs.approved }}'})
+            for key in ('require_approval', 'approved'):
+                self.assertEqual(jobs['authorization']['with'][key], '${{ inputs.' + key + ' }}')
             if 'validation' in jobs:
                 self.assertEqual(jobs['validation']['needs'], 'authorization')
                 self.assertEqual(jobs['release']['needs'], 'validation')
@@ -62,9 +62,9 @@ class OperationAuthorizationTests(unittest.TestCase):
             root = Path(path)
             release = workflow(root, 'release.yml')
             triggers = release.get('on', release.get(True))
-            self.assertEqual(set(triggers), {'workflow_dispatch'})
+            self.assertEqual(set(triggers), {'workflow_dispatch', 'push'} if 'policy' in release['jobs'] else {'workflow_dispatch'})
             self.assertFalse(triggers['workflow_dispatch']['inputs']['release_approved']['default'])
-            self.assertEqual(set(release['jobs']), {'release'})
+            self.assertIn('release', release['jobs'])
             job = release['jobs']['release']
             self.assertIn("github.ref == 'refs/heads/main'", job['if'])
             self.assertIn("github.event_name == 'workflow_dispatch'", job['if'])
@@ -120,6 +120,33 @@ class OperationAuthorizationTests(unittest.TestCase):
         self.assertIn('steps.health.outcome', rollback['if'])
         self.assertIn('git checkout --detach', rollback['run'])
         self.assertIn('PRIVILEGED_DEPLOY_COMMAND', rollback['run'])
+
+    def test_automatic_guard_requires_main_push_and_policy(self):
+        steps = workflow(ROOT, 'authorize-operation.yml')['jobs']['authorize']['steps']
+        for event in ('push', 'pull_request', 'workflow_dispatch'):
+            for ref in ('refs/heads/main', 'refs/heads/feature', 'refs/tags/v1.0.0'):
+                for policy in ('', 'python3 scripts/policy.py'):
+                    result = subprocess.run(['bash', '-c', steps[0]['run']], capture_output=True,
+                                            env={**os.environ, 'AUTOMATIC': 'true', 'CALLER_EVENT': event,
+                                                 'CALLER_REF': ref, 'POLICY_COMMAND': policy})
+                    self.assertEqual(result.returncode == 0,
+                                     event == 'push' and ref == 'refs/heads/main' and bool(policy))
+        self.assertEqual(steps[1]['with']['ref'], '${{ inputs.revision || github.sha }}')
+        policy = steps[2]
+        result = subprocess.run(['bash', '-c', policy['run']], capture_output=True,
+                                env={**os.environ, 'POLICY_COMMAND': 'exit 42'})
+        self.assertEqual(result.returncode, 42)
+
+    def test_automatic_recovery_never_falls_back_to_whole_target_apply(self):
+        rollback = next(s for s in workflow(ROOT, 'deploy-ansible.yml')['jobs']['deploy']['steps']
+                        if s.get('id') == 'rollback')
+        guard = rollback['run'].split('git checkout')[0]
+        self.assertIn('test -n "$PRIVILEGED_ROLLBACK_COMMAND"', guard)
+        self.assertIn('exit 0', guard)
+        for command in ('', 'exit 23'):
+            result = subprocess.run(['bash', '-c', guard], capture_output=True,
+                                    env={**os.environ, 'AUTOMATIC': 'true', 'PRIVILEGED_ROLLBACK_COMMAND': command})
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == '__main__':

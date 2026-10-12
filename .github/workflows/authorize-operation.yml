@@ -13,6 +13,21 @@ on:
         required: false
         type: boolean
         default: false
+      automatic:
+        description: Opt into a repository-owned routine update policy on main pushes.
+        required: false
+        type: boolean
+        default: false
+      automatic_policy_command:
+        description: Fail-closed consumer policy; checked before publication/deployment.
+        required: false
+        type: string
+        default: ''
+      revision:
+        description: Exact consumer release revision to inspect; empty uses the event SHA.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -27,9 +42,15 @@ jobs:
           APPROVED: ${{ inputs.approved }}
           CALLER_EVENT: ${{ github.event_name }}
           CALLER_REF: ${{ github.ref }}
+          AUTOMATIC: ${{ inputs.automatic }}
+          POLICY_COMMAND: ${{ inputs.automatic_policy_command }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${AUTOMATIC:-false}" == true ]]; then
+            [[ "$CALLER_EVENT" == push && "$CALLER_REF" == refs/heads/main && -n "${POLICY_COMMAND:-}" ]]
+            exit
+          fi
           if [[ "$REQUIRE_APPROVAL" == false ]]; then exit 0; fi
           if [[ "$REQUIRE_APPROVAL" != true || "$APPROVED" != true ||
                 "$CALLER_EVENT" != workflow_dispatch ||
@@ -37,3 +58,17 @@ jobs:
             echo 'Operation requires an authorized manual dispatch on main.' >&2
             exit 1
           fi
+      - name: Check out automatic policy at the exact consumer revision
+        if: inputs.automatic
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          fetch-depth: 0
+      - name: Verify repository-owned automatic update authorization
+        if: inputs.automatic
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POLICY_COMMAND: ${{ inputs.automatic_policy_command }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        shell: bash
+        run: bash -euo pipefail -c "$POLICY_COMMAND"

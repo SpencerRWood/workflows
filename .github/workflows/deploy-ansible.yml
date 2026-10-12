@@ -13,6 +13,21 @@ on:
         type: boolean
         default: false
         required: false
+      automatic:
+        description: Authorize through a fail-closed consumer routine-update policy.
+        type: boolean
+        default: false
+        required: false
+      automatic_policy_command:
+        description: Read-only consumer authorization command; required in automatic mode.
+        type: string
+        default: ''
+        required: false
+      privileged_rollback_command:
+        description: Optional consumer recovery of only affected immutable image identities.
+        type: string
+        default: ''
+        required: false
       repository:
         description: Repository containing the release to deploy.
         required: true
@@ -119,6 +134,9 @@ jobs:
     with:
       require_approval: ${{ inputs.require_approval }}
       approved: ${{ inputs.approved }}
+      automatic: ${{ inputs.automatic }}
+      automatic_policy_command: ${{ inputs.automatic_policy_command }}
+      revision: ${{ inputs.ref }}
 
   deploy:
     needs: authorization
@@ -307,8 +325,15 @@ jobs:
           HEALTH_CHECK_COMMAND: ${{ inputs.health_check_command }}
           PRIVILEGED_DEPLOY_COMMAND: ${{ inputs.privileged_deploy_command }}
           PRIVILEGED_HEALTH_CHECK_COMMAND: ${{ inputs.privileged_health_check_command }}
+          PRIVILEGED_ROLLBACK_COMMAND: ${{ inputs.privileged_rollback_command }}
+          AUTOMATIC: ${{ inputs.automatic }}
         run: |
           set -euo pipefail
+          if [[ "$AUTOMATIC" == true ]]; then
+            test -n "$PRIVILEGED_ROLLBACK_COMMAND"
+            eval "$PRIVILEGED_ROLLBACK_COMMAND"
+            exit 0
+          fi
           git checkout --detach "$PREVIOUS_REF"
           if [[ -n "$SECRETS_FILE" ]]; then
             set -a
