@@ -9,15 +9,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
-def is_current(ref: str) -> bool:
+def is_current(ref: str, approved_revision: str | None = None) -> bool:
     """Compare the checked-out commit with the authoritative remote branch."""
     if ref != "refs/heads/main":
         raise ValueError(f"release publication requires refs/heads/main: {ref!r}")
     local = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if approved_revision is not None:
+        if not SHA.fullmatch(approved_revision):
+            raise ValueError("approved_revision must be a full commit SHA")
+        if local != approved_revision:
+            raise ValueError("checkout differs from the explicitly approved revision")
     remote_line = subprocess.check_output(
         ["git", "ls-remote", "--exit-code", "origin", ref], text=True
     ).strip()
@@ -35,7 +39,13 @@ def main() -> int:
     parser.add_argument("--require-current", action="store_true")
     args = parser.parse_args()
     try:
-        current = is_current(os.environ["RELEASE_REF"])
+        required = os.environ.get("APPROVAL_REQUIRED", "false")
+        if required not in {"true", "false"}:
+            raise ValueError("APPROVAL_REQUIRED must be true or false")
+        approved = os.environ.get("APPROVED_REVISION", "")
+        if required == "true" and not approved:
+            raise ValueError("approval-gated publication requires approved_revision")
+        current = is_current(os.environ["RELEASE_REF"], approved or None)
         if args.require_current and not current:
             print("release head changed before publication completed", file=sys.stderr)
             return 1

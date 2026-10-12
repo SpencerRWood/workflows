@@ -2,11 +2,14 @@
 
 import hashlib
 import os
-import subprocess
+import sys
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+import release_registry
 
 ROOT = Path(__file__).parents[1]
 INTEGRATED = (ROOT / ".github/workflows/release-container.yml").read_text()
@@ -14,7 +17,9 @@ NON_CONTAINER = (ROOT / ".github/workflows/release.yml").read_text()
 
 
 class ReleaseOrderTests(unittest.TestCase):
-    def test_all_publishing_jobs_are_main_only_and_validation_is_branch_agnostic(self) -> None:
+    def test_all_publishing_jobs_are_main_only_and_validation_is_branch_agnostic(
+        self,
+    ) -> None:
         guard = "if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
         for name in ("release.yml", "release-container.yml", "container-release.yml"):
             with self.subTest(workflow=name):
@@ -28,14 +33,6 @@ class ReleaseOrderTests(unittest.TestCase):
         self.assertNotIn("version --vcs-release", validation)
 
     def test_release_tagging_shell_uses_the_validated_digest(self) -> None:
-        marker = "      - name: Publish the validated digest under release image tags"
-        stage = INTEGRATED.split(marker, 1)[1]
-        body = stage.split("        run: |\n", 1)[1]
-        lines = []
-        for line in body.splitlines():
-            if line and not line.startswith("          "):
-                break
-            lines.append(line[10:])
         manifest = b'{"schemaVersion":2,"manifests":[]}'
         digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
@@ -49,7 +46,8 @@ class ReleaseOrderTests(unittest.TestCase):
                 'root = Path(os.environ["FAKE_DOCKER_STATE"])\n'
                 'tag = args[3] if len(args) > 3 else ""\n'
                 'if args[:3] == ["buildx", "imagetools", "inspect"]:\n'
-                '    if not (root / tag.replace("/", "_")).exists(): sys.exit(1)\n'
+                '    if not (root / tag.replace("/", "_")).exists():\n'
+                '        print(tag + ": not found", file=sys.stderr); sys.exit(1)\n'
                 '    if "--raw" in args: sys.stdout.buffer.write(b\'{"schemaVersion":2,"manifests":[]}\')\n'
                 'elif args[:3] == ["buildx", "imagetools", "create"]:\n'
                 '    (root / args[4].replace("/", "_")).write_text(args[5])\n'
@@ -66,13 +64,19 @@ class ReleaseOrderTests(unittest.TestCase):
                 "SHA_IMAGE": "ghcr.io/example/app:sha-abc",
                 "EXPECTED_DIGEST": digest,
             }
-            result = subprocess.run(
-                ["bash", "-e", "-c", "\n".join(lines)],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
+            # Execute the supported promotion helper with a fake registry and
+            # a validated source guard; no live registry or source mutations.
+            with (
+                patch.dict(os.environ, env),
+                patch.object(release_registry, "require_current"),
+            ):
+                release_registry.promote(
+                    env["SOURCE_IMAGE"],
+                    [env["VERSION_IMAGE"], env["SHA_IMAGE"]],
+                    digest,
+                    False,
+                    root,
+                )
             for tag in ("v1.2.3", "sha-abc"):
                 self.assertEqual(
                     (root / f"ghcr.io_example_app:{tag}").read_text(),
