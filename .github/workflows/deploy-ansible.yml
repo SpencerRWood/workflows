@@ -33,9 +33,14 @@ on:
         required: true
         type: string
       ref:
-        description: Immutable release tag to deploy.
+        description: Immutable release tag, or exact event commit when allow_main_commit is enabled.
         required: true
         type: string
+      allow_main_commit:
+        description: Allow the exact main push commit after caller validation and authorization.
+        required: false
+        type: boolean
+        default: false
       skip_superseded:
         description: Skip automated deployment when this release is no longer the default branch head.
         required: false
@@ -156,8 +161,22 @@ jobs:
           fetch-depth: 0
 
       - name: Verify release checkout
+        env:
+          DEPLOY_REF: ${{ inputs.ref }}
+          ALLOW_MAIN_COMMIT: ${{ inputs.allow_main_commit }}
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          test "$(git describe --exact-match --tags HEAD)" = "${{ inputs.ref }}"
+          set -euo pipefail
+          if [[ "$ALLOW_MAIN_COMMIT" == true && "$DEPLOY_REF" =~ ^[a-f0-9]{40}$ ]]; then
+            test "$CALLER_EVENT" = push
+            test "$CALLER_REF" = refs/heads/main
+            test "$DEPLOY_REF" = "$EVENT_SHA"
+            test "$(git rev-parse HEAD)" = "$DEPLOY_REF"
+          else
+            test "$(git describe --exact-match --tags HEAD)" = "$DEPLOY_REF"
+          fi
           echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} start=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
       - name: Set up uv

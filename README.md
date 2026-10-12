@@ -33,6 +33,13 @@ the last successful GitHub Environment deployment ref once and checks it again.
 It restores repository-defined runtime configuration only, never a blind database
 rollback.
 
+Consumers with standing authorization for main-push delivery can opt into
+`allow_main_commit: true` and pass the full event commit SHA when validation
+succeeds but no release tag is produced. The checkout must match both that SHA
+and the main push event SHA. PRs, feature branches, moving refs and manual
+dispatches cannot use this commit path. Authorization, target checks, health
+verification and recovery remain required; the default tag contract is unchanged.
+
 `resolve-release.yml@v1` verifies a requested published release tag or selects
 the latest published release when its `ref` input is empty. It returns `ref` to
 the consumer's deployment job. Consumers can call it from one `deploy.yml`
