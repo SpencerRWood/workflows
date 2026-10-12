@@ -23,6 +23,16 @@ on:
         type: string
         default: ''
         required: false
+      automatic:
+        description: Apply the consumer's routine-update policy to a main push.
+        type: boolean
+        required: false
+        default: false
+      automatic_policy_command:
+        description: Read-only consumer authorization command; required for automatic mode.
+        type: string
+        required: false
+        default: ''
     outputs:
       released:
         description: Whether publication at this checkout was remotely verified, including recovery.
@@ -64,6 +74,8 @@ jobs:
     with:
       require_approval: ${{ inputs.require_approval }}
       approved: ${{ inputs.approved }}
+      automatic: ${{ inputs.automatic }}
+      automatic_policy_command: ${{ inputs.automatic_policy_command }}
 
   validation:
     needs: authorization
