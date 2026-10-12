@@ -141,12 +141,27 @@ class OperationAuthorizationTests(unittest.TestCase):
         rollback = next(s for s in workflow(ROOT, 'deploy-ansible.yml')['jobs']['deploy']['steps']
                         if s.get('id') == 'rollback')
         guard = rollback['run'].split('git checkout')[0]
-        self.assertIn('test -n "$PRIVILEGED_ROLLBACK_COMMAND"', guard)
+        self.assertIn('Automatic deployment requires scoped recovery.', guard)
         self.assertIn('exit 0', guard)
         for command in ('', 'exit 23'):
             result = subprocess.run(['bash', '-c', guard], capture_output=True,
                                     env={**os.environ, 'AUTOMATIC': 'true', 'PRIVILEGED_ROLLBACK_COMMAND': command})
             self.assertNotEqual(result.returncode, 0)
+
+    def test_manual_scoped_recovery_does_not_apply_previous_whole_target(self):
+        rollback = next(s for s in workflow(ROOT, 'deploy-ansible.yml')['jobs']['deploy']['steps']
+                        if s.get('id') == 'rollback')
+        guard = rollback['run'].split('git checkout')[0]
+        for automatic in ('true', 'false'):
+            result = subprocess.run(['bash', '-c', guard], capture_output=True, text=True,
+                                    env={**os.environ, 'AUTOMATIC': automatic,
+                                         'PRIVILEGED_ROLLBACK_COMMAND': 'printf scoped-recovery'})
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, 'scoped-recovery')
+            failed = subprocess.run(['bash', '-c', guard], capture_output=True,
+                                    env={**os.environ, 'AUTOMATIC': automatic,
+                                         'PRIVILEGED_ROLLBACK_COMMAND': 'exit 23'})
+            self.assertEqual(failed.returncode, 23)
 
 
 if __name__ == '__main__':
