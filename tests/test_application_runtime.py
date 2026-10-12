@@ -13,18 +13,27 @@ import application_runtime
 
 class ApplicationRuntimeTests(unittest.TestCase):
     def test_mutable_image_is_rejected_before_docker(self):
-        result = subprocess.run([
-            sys.executable, str(ROOT / "scripts/application_runtime.py"),
-            "ghcr.io/example/app:latest", "--check-module", "sample.check",
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/application_runtime.py"),
+                "ghcr.io/example/app:latest",
+                "--check-module",
+                "sample.check",
+            ],
+            capture_output=True,
+            text=True,
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("immutable GHCR digest", result.stderr)
 
     def test_exact_candidate_and_isolated_database_on_success(self):
         calls = []
+
         def run(args, **kwargs):
             calls.append(args)
             return subprocess.CompletedProcess(args, 0, "", "")
+
         image = "ghcr.io/example/app@sha256:" + "a" * 64
         with patch.object(application_runtime.subprocess, "run", side_effect=run):
             application_runtime.validate(image, "sample.check", 30)
@@ -41,27 +50,54 @@ class ApplicationRuntimeTests(unittest.TestCase):
         for timed_out in (False, True):
             with self.subTest(timed_out=timed_out):
                 calls = []
+
                 def run(args, **kwargs):
                     calls.append(args)
                     if "--env-file" in args:
                         if timed_out:
                             raise subprocess.TimeoutExpired(args, 30)
-                        return subprocess.CompletedProcess(args, 1, "", "failed repository check")
+                        return subprocess.CompletedProcess(
+                            args, 1, "", "failed repository check"
+                        )
                     return subprocess.CompletedProcess(args, 0, "", "")
-                with patch.object(application_runtime.subprocess, "run", side_effect=run):
-                    with self.assertRaisesRegex(application_runtime.RuntimeFailure, "candidate repository checks"):
+
+                with patch.object(
+                    application_runtime.subprocess, "run", side_effect=run
+                ):
+                    with self.assertRaisesRegex(
+                        application_runtime.RuntimeFailure,
+                        "candidate repository checks",
+                    ):
                         application_runtime.validate("image", "sample.check", 30)
-                self.assertTrue(any(args[:3] == ["docker", "network", "rm"] for args in calls))
+                self.assertTrue(
+                    any(args[:3] == ["docker", "network", "rm"] for args in calls)
+                )
 
     def test_gate_precedes_all_release_publication_and_is_required(self):
         workflow = (ROOT / ".github/workflows/release-container.yml").read_text()
         gate = workflow.index("Validate exact application candidate digest")
         self.assertLess(workflow.index("Verify exact candidate digest"), gate)
-        self.assertLess(gate, workflow.index("Publish the validated digest under release image tags"))
-        self.assertLess(gate, workflow.index("Finalize semantic-release and GitHub Release"))
+        self.assertLess(
+            gate,
+            workflow.index("Publish the validated digest under release image tags"),
+        )
+        self.assertLess(
+            gate, workflow.index("Finalize semantic-release and GitHub Release")
+        )
         self.assertIn("steps.config.outputs.runtime_validation == 'true'", workflow)
         self.assertNotIn("continue-on-error", workflow)
-        self.assertNotIn("always()", workflow)
+        # Failure cleanup may retain evidence, but must never publish artifacts.
+        import yaml
+
+        steps = yaml.safe_load(workflow)["jobs"]["release"]["steps"]
+        always = [step for step in steps if "always()" in step.get("if", "")]
+        self.assertTrue(always)
+        self.assertTrue(
+            all(
+                "Preserve" in step["name"] or "Capture available" in step["name"]
+                for step in always
+            )
+        )
 
 
 if __name__ == "__main__":

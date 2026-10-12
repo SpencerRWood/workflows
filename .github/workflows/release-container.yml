@@ -18,6 +18,16 @@ on:
         type: boolean
         default: false
         required: false
+      approved_revision:
+        description: Exact reviewed main SHA; mandatory when require_approval is true.
+        type: string
+        required: false
+        default: ''
+      recovery_approved:
+        description: Separate authorization to resume a partial publication or accept an existing candidate.
+        type: boolean
+        required: false
+        default: false
     outputs:
       released:
         value: ${{ jobs.release.outputs.released }}
@@ -79,6 +89,13 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
+      attestations: write
+    env:
+      APPROVAL_REQUIRED: ${{ inputs.require_approval }}
+      APPROVED_REVISION: ${{ inputs.approved_revision }}
+      RECOVERY_APPROVED: ${{ inputs.recovery_approved }}
+      RELEASE_REF: ${{ github.ref }}
     outputs:
       released: ${{ steps.publish.outputs.released || 'false' }}
       release_tag: ${{ steps.publish.outputs.release_tag }}
@@ -106,6 +123,12 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Check release checkout is still the branch head
+        id: current_head
+        run: |
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_registry.py" preflight --evidence "$RUNNER_TEMP/release-evidence"
+
       - name: Load release configuration
         id: config
         run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
@@ -130,12 +153,6 @@ jobs:
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
 
-      - name: Check release checkout is still the branch head
-        id: current_head
-        env:
-          RELEASE_REF: ${{ github.ref }}
-        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py"
-
       - name: Determine next version with semantic-release
         id: version
         if: steps.current_head.outputs.current == 'true'
@@ -151,6 +168,11 @@ jobs:
             exit 1
           }
           if git show-ref --verify --quiet "refs/tags/$tag"; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq 'select(.draft == false and .prerelease == false) | .id' > "$RUNNER_TEMP/release-evidence/existing-release.txt"
+            test -s "$RUNNER_TEMP/release-evidence/existing-release.txt" || {
+              echo 'Existing Git tag lacks a completed Release; stop for separately authorized finalization.' >&2
+              exit 1
+            }
             echo "No new semantic release is due ($tag already exists)."
             exit 0
           fi
@@ -186,6 +208,21 @@ jobs:
           PLATFORMS: ${{ steps.config.outputs.container_platforms }}
         run: python3 "$RUNNER_TEMP/workflow-contract/scripts/container_release.py"
 
+      - name: Snapshot prepared candidate inputs
+        id: provenance
+        if: steps.version.outputs.release_tag != '' && inputs.require_approval
+        env:
+          SOURCE_REVISION: ${{ inputs.approved_revision }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          WORKING_DIRECTORY: ${{ steps.config.outputs.working_directory }}
+          DOCKERFILE: ${{ steps.config.outputs.container_dockerfile }}
+          BUILD_CONTEXT: ${{ steps.config.outputs.container_context }}
+          PLATFORMS: ${{ steps.config.outputs.container_platforms }}
+        run: |
+          test "$(git -C "$RUNNER_TEMP/workflow-contract" rev-parse HEAD)" = "$WORKFLOW_REVISION"
+          python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" prepare --snapshot "$RUNNER_TEMP/candidate-inputs" --evidence "$RUNNER_TEMP/release-evidence"
+
       - name: Set up Docker Buildx
         if: steps.version.outputs.release_tag != ''
         uses: docker/setup-buildx-action@v4.4.1
@@ -204,26 +241,30 @@ jobs:
         env:
           CANDIDATE_IMAGE: ${{ steps.image.outputs.image_repository }}:candidate-${{ steps.image.outputs.commit_sha }}-${{ steps.version.outputs.release_tag }}
         run: |
-          set -euo pipefail
-          if docker buildx imagetools inspect "$CANDIDATE_IMAGE" >/dev/null 2>&1; then
-            digest="sha256:$(docker buildx imagetools inspect "$CANDIDATE_IMAGE" --raw | sha256sum | cut -d ' ' -f1)"
-            echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          fi
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_registry.py" find --evidence "$RUNNER_TEMP/release-evidence"
+
+      - name: Require current approved main before candidate publication
+        if: steps.version.outputs.release_tag != '' && steps.existing.outputs.digest == ''
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
 
       - name: Build candidate image once
         id: candidate
         if: steps.version.outputs.release_tag != '' && steps.existing.outputs.digest == ''
         uses: docker/build-push-action@v7.4.0
         with:
-          context: ${{ steps.config.outputs.container_context }}
-          file: ${{ steps.config.outputs.container_dockerfile }}
+          context: ${{ inputs.require_approval && format('{0}/candidate-inputs/{1}', runner.temp, steps.config.outputs.container_context) || steps.config.outputs.container_context }}
+          file: ${{ inputs.require_approval && format('{0}/candidate-inputs/{1}', runner.temp, steps.config.outputs.container_dockerfile) || steps.config.outputs.container_dockerfile }}
           push: true
+          provenance: mode=max
+          sbom: true
           platforms: ${{ steps.config.outputs.container_platforms }}
           tags: ${{ steps.image.outputs.image_repository }}:candidate-${{ steps.image.outputs.commit_sha }}-${{ steps.version.outputs.release_tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.image.outputs.commit_sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.release_tag }}
+            io.wood.release.inputs=${{ steps.provenance.outputs.inputs_sha256 }}
           cache-from: type=gha,scope=${{ github.repository }}-container
           cache-to: type=gha,mode=max,scope=${{ github.repository }}-container
 
@@ -239,6 +280,45 @@ jobs:
           actual="sha256:$(docker buildx imagetools inspect "$CANDIDATE_IMAGE" --raw | sha256sum | cut -d ' ' -f1)"
           test "$actual" = "$EXPECTED_DIGEST"
           echo "digest=$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Capture candidate build receipt
+        if: inputs.require_approval && steps.candidate.outputs.digest != ''
+        env:
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+          BUILD_METADATA: ${{ steps.candidate.outputs.metadata }}
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" receipt --evidence "$RUNNER_TEMP/release-evidence"
+
+      - name: Attest candidate build provenance
+        id: build_attestation
+        if: inputs.require_approval && steps.candidate.outputs.digest != ''
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.image.outputs.image_repository }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Sign prepared candidate identity
+        id: receipt_attestation
+        if: inputs.require_approval && steps.candidate.outputs.digest != ''
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.image.outputs.image_repository }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          predicate-type: https://woodanalytics.dev/attestations/container-inputs/v1
+          predicate-path: ${{ runner.temp }}/release-evidence/receipt.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Verify signed candidate identity and actual package
+        if: steps.version.outputs.release_tag != '' && inputs.require_approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.image_repository }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
+          python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" verify --evidence "$RUNNER_TEMP/release-evidence"
 
       - name: Validate exact Dagster candidate digest
         if: steps.version.outputs.release_tag != '' && steps.config.outputs.dagster_runtime_validation == 'true'
@@ -264,17 +344,8 @@ jobs:
           SHA_IMAGE: ${{ steps.image.outputs.sha_image }}
           EXPECTED_DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
-          set -euo pipefail
-          for image in "$VERSION_IMAGE" "$SHA_IMAGE"; do
-            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
-              actual="sha256:$(docker buildx imagetools inspect "$image" --raw | sha256sum | cut -d ' ' -f1)"
-              test "$actual" = "$EXPECTED_DIGEST" || { echo "Existing release image tag has a different digest: $image" >&2; exit 1; }
-            else
-              docker buildx imagetools create --tag "$image" "$SOURCE_IMAGE"
-              actual="sha256:$(docker buildx imagetools inspect "$image" --raw | sha256sum | cut -d ' ' -f1)"
-              test "$actual" = "$EXPECTED_DIGEST" || { echo "Published digest differs from validated digest: $image" >&2; exit 1; }
-            fi
-          done
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_registry.py" promote --evidence "$RUNNER_TEMP/release-evidence"
 
       - name: Finalize semantic-release and GitHub Release
         id: publish
@@ -286,7 +357,7 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py"
+          python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
           actual_tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
           test "$actual_tag" = "$EXPECTED_TAG" || { echo "semantic-release version changed during validation: $EXPECTED_TAG -> $actual_tag" >&2; exit 1; }
           if ! uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release; then
@@ -294,6 +365,28 @@ jobs:
             exit 1
           fi
           test "$(git rev-parse "refs/tags/$EXPECTED_TAG^{commit}")" = "$(git rev-parse HEAD)"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$EXPECTED_TAG" --silent
+          if [[ "$APPROVAL_REQUIRED" == true ]]; then
+            python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" finalized --evidence "$RUNNER_TEMP/release-evidence"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$EXPECTED_TAG" --jq 'select(.draft == false and .prerelease == false) | .id' > "$RUNNER_TEMP/release-evidence/final-release.txt"
+          test -s "$RUNNER_TEMP/release-evidence/final-release.txt"
           echo "released=true" >> "$GITHUB_OUTPUT"
           echo "release_tag=$EXPECTED_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Capture available Buildx evidence after interruption
+        if: always() && steps.candidate.outputs.metadata != ''
+        env:
+          BUILD_METADATA: ${{ steps.candidate.outputs.metadata }}
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" capture --evidence "$RUNNER_TEMP/release-evidence"
+
+      - name: Preserve publication evidence after success or interruption
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/release-evidence/
+            ${{ steps.build_attestation.outputs.bundle-path }}
+            ${{ steps.receipt_attestation.outputs.bundle-path }}
+          if-no-files-found: warn
+          retention-days: 90
