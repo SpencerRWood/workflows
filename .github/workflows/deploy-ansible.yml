@@ -329,10 +329,13 @@ jobs:
           AUTOMATIC: ${{ inputs.automatic }}
         run: |
           set -euo pipefail
-          if [[ "$AUTOMATIC" == true ]]; then
-            test -n "$PRIVILEGED_ROLLBACK_COMMAND"
+          if [[ -n "$PRIVILEGED_ROLLBACK_COMMAND" ]]; then
             eval "$PRIVILEGED_ROLLBACK_COMMAND"
             exit 0
+          fi
+          if [[ "$AUTOMATIC" == true ]]; then
+            echo 'Automatic deployment requires scoped recovery.' >&2
+            exit 1
           fi
           git checkout --detach "$PREVIOUS_REF"
           if [[ -n "$SECRETS_FILE" ]]; then
@@ -364,7 +367,7 @@ jobs:
           PREVIOUS: ${{ steps.previous.outputs.ref }}
         run: |
           python3 - <<'PY'
-          import json, os
+          import json, os, subprocess
           from datetime import datetime, timezone
           path = os.environ['STATE_FILE']
           try:
@@ -376,6 +379,7 @@ jobs:
           if success:
               state['previous_successful_release'] = state.get('current_release')
               state['current_release'] = os.environ['RELEASE']
+              state['commit_sha'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           state.update({
               'deployment_target': os.environ['TARGET'],
               'timestamp': datetime.now(timezone.utc).isoformat(),
