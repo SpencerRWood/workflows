@@ -15,10 +15,11 @@ candidate through release-time lock regeneration.
 
 ## Exclusive writers during publication
 
-Before dispatch, establish and retain an active GitHub branch ruleset targeting
-`refs/heads/main` with **Restrict updates**, **Restrict deletions**, and **Block
-force pushes**. Only the specifically reviewed release GitHub App may bypass
-restricted updates, in `always` mode. Human administrators, merge queues,
+Before dispatch, establish and retain independent active GitHub branch rulesets
+targeting `refs/heads/main`. The **Restrict updates** ruleset permits only the
+specifically reviewed release GitHub App to bypass in `always` mode. A separate
+**Restrict deletions / Block force pushes** ruleset has no bypass actors, including
+that App. Human administrators, merge queues,
 dependabot/automerge, other apps and workflows must have no bypass. Limit that
 app's credential to this approved release run, using the existing secret resolver;
 do not distribute it to other workflows. The selected release credential must be
@@ -40,6 +41,9 @@ head checks run before candidate publication/reuse, each missing final image tag
 write and semantic-release finalization. They never update the checkout to a newer
 main. Concurrency serializes release runs, but is **not** a lock against unrelated
 main or registry writers.
+
+See [release writer controls](release-writer-controls.md) for credential modes,
+the separate GHCR Actions principal, missing live inventory and operational gates.
 
 ## Signed build identity
 

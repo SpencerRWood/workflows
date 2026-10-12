@@ -28,6 +28,21 @@ on:
         type: boolean
         required: false
         default: false
+      release_git_auth:
+        description: Explicit Git writer authentication; github-app never falls back to the workflow token.
+        type: string
+        required: false
+        default: github-token
+      release_app_client_id:
+        description: Reviewed release App client ID, required for github-app.
+        type: string
+        required: false
+        default: ''
+      release_app_slug:
+        description: Reviewed release App slug, required for github-app.
+        type: string
+        required: false
+        default: ''
     outputs:
       released:
         value: ${{ jobs.release.outputs.released }}
@@ -42,6 +57,8 @@ on:
       version_image_digest:
         value: ${{ jobs.release.outputs.version_image_digest }}
     secrets:
+      release_app_private_key:
+        required: false
       dbt_host:
         required: false
       dbt_user:
@@ -92,6 +109,7 @@ jobs:
       id-token: write
       attestations: write
     env:
+      GH_TOKEN: ${{ github.token }}
       APPROVAL_REQUIRED: ${{ inputs.require_approval }}
       APPROVED_REVISION: ${{ inputs.approved_revision }}
       RECOVERY_APPROVED: ${{ inputs.recovery_approved }}
@@ -108,6 +126,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure process-scoped read authentication
+        run: gh auth setup-git
 
       - name: Check out workflow implementation
         env:
@@ -128,6 +150,14 @@ jobs:
         run: |
           python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
           python "$RUNNER_TEMP/workflow-contract/scripts/release_registry.py" preflight --evidence "$RUNNER_TEMP/release-evidence"
+
+      - name: Require explicit release Git credentials
+        env:
+          RELEASE_GIT_AUTH: ${{ inputs.release_git_auth }}
+          RELEASE_APP_CLIENT_ID: ${{ inputs.release_app_client_id }}
+          RELEASE_APP_SLUG: ${{ inputs.release_app_slug }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.release_app_private_key }}
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_credentials.py"
 
       - name: Load release configuration
         id: config
@@ -336,7 +366,27 @@ jobs:
           TIMEOUT_SECONDS: ${{ steps.config.outputs.runtime_timeout_seconds }}
         run: python3 "$RUNNER_TEMP/workflow-contract/scripts/application_runtime.py" "$IMAGE" --check-module "$CHECK_MODULE" --timeout "$TIMEOUT_SECONDS"
 
+      - name: Mint repository-scoped Git writer token
+        id: release_app
+        if: steps.version.outputs.release_tag != '' && inputs.release_git_auth == 'github-app'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ inputs.release_app_client_id }}
+          private-key: ${{ secrets.release_app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          skip-token-revoke: false
+
+      - name: Verify reviewed Git writer identity
+        if: steps.version.outputs.release_tag != '' && inputs.release_git_auth == 'github-app'
+        env:
+          EXPECTED_SLUG: ${{ inputs.release_app_slug }}
+          ACTUAL_SLUG: ${{ steps.release_app.outputs.app-slug }}
+        run: test "$ACTUAL_SLUG" = "$EXPECTED_SLUG"
+
       - name: Publish the validated digest under release image tags
+        timeout-minutes: 10
         if: steps.version.outputs.release_tag != ''
         env:
           SOURCE_IMAGE: ${{ steps.image.outputs.image_repository }}@${{ steps.digest.outputs.digest }}
@@ -349,14 +399,26 @@ jobs:
 
       - name: Finalize semantic-release and GitHub Release
         id: publish
+        timeout-minutes: 10
         if: steps.version.outputs.release_tag != ''
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_GIT_AUTH: ${{ inputs.release_git_auth }}
+          RELEASE_APP_TOKEN: ${{ steps.release_app.outputs.token }}
+          WORKFLOW_TOKEN: ${{ github.token }}
           EXPECTED_TAG: ${{ steps.version.outputs.release_tag }}
           RELEASE_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          if [[ "$RELEASE_GIT_AUTH" == github-app ]]; then
+            test -n "$RELEASE_APP_TOKEN"
+            export GH_TOKEN="$RELEASE_APP_TOKEN"
+          elif [[ "$RELEASE_GIT_AUTH" == github-token ]]; then
+            export GH_TOKEN="$WORKFLOW_TOKEN"
+          else
+            exit 1
+          fi
+          export GITHUB_TOKEN="$GH_TOKEN"
           python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
           actual_tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
           test "$actual_tag" = "$EXPECTED_TAG" || { echo "semantic-release version changed during validation: $EXPECTED_TAG -> $actual_tag" >&2; exit 1; }
