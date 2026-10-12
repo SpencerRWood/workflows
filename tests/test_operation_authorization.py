@@ -16,6 +16,27 @@ def workflow(root, name):
 
 
 class OperationAuthorizationTests(unittest.TestCase):
+    def test_commit_deployment_accepts_only_exact_main_push_revision(self):
+        step = next(s for s in workflow(ROOT, 'deploy-ansible.yml')['jobs']['deploy']['steps']
+                    if s['name'] == 'Verify release checkout')
+        guard = step['run'].split('echo "repository=')[0]
+        sha = 'a' * 40
+        git = 'git() { if [[ "$1" == rev-parse ]]; then echo "$CHECKED_OUT_SHA"; else echo v1.0.0; fi; };\n'
+        baseline = {'ALLOW_MAIN_COMMIT': 'true', 'DEPLOY_REF': sha, 'EVENT_SHA': sha,
+                    'CHECKED_OUT_SHA': sha, 'CALLER_EVENT': 'push', 'CALLER_REF': 'refs/heads/main'}
+        for changes, allowed in [({}, True), ({'ALLOW_MAIN_COMMIT': 'false'}, False),
+                                 ({'CALLER_EVENT': 'pull_request'}, False),
+                                 ({'CALLER_EVENT': 'workflow_dispatch'}, False),
+                                 ({'CALLER_REF': 'refs/heads/feature'}, False),
+                                 ({'EVENT_SHA': 'b' * 40}, False),
+                                 ({'CHECKED_OUT_SHA': 'b' * 40}, False),
+                                 ({'DEPLOY_REF': 'main'}, False),
+                                 ({'ALLOW_MAIN_COMMIT': 'false', 'DEPLOY_REF': 'v1.0.0'}, True)]:
+            with self.subTest(changes=changes):
+                result = subprocess.run(['bash', '-c', git + guard], capture_output=True,
+                                        env={**os.environ, **baseline, **changes})
+                self.assertEqual(result.returncode == 0, allowed)
+
     def test_actual_guard_event_ref_approval_matrix(self):
         guard = workflow(ROOT, 'authorize-operation.yml')['jobs']['authorize']['steps'][0]
         for event in ('push', 'pull_request', 'release', 'workflow_dispatch'):
