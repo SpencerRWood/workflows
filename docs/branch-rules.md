@@ -2,9 +2,12 @@
 
 Development strategy and lifecycle gates are defined in the
 [canonical branching policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md).
-`workflows`, `infrastructure` and `homelab` remain trunk-based; adopted application Story
-PRs target their approved release integration branch. Nonadopters retain existing
-conventions. See [central safeguards and caller adoption dependencies](release-branch-adoption.md).
+Every repository targets working branch → development → protected main → automatic
+pinned release execution. Existing trunk and bounded release mappings remain
+transitional arrangements until explicitly migrated; repository purpose does not
+select a branching strategy. Read current root metadata before selecting a Story
+base or target. See [the BR-02 adoption plan](br02-adoption-plan.md) and
+[central safeguards and caller adoption dependencies](release-branch-adoption.md).
 Existing protections below
 remain additional requirements. Release-branch protection needs a separate rollout;
 this record does not attest that those rulesets exist.
@@ -32,10 +35,13 @@ These two repositories use `release.tag_merged_commit = true`. They are
 configuration repositories, not Python packages. Semantic-release calculates
 the next version from commits, tags the validated merged `main` commit, and
 publishes a GitHub Release without writing to `main`. The Git tag is their
-version source. Deployment checks out that exact tag. Automatic main-merge
-publication and deployment in these trunk repositories are a gap against the
-separate lifecycle gates: agents must obtain separate authorization before a
-merge that triggers them. Normal Story approval does not authorize those stages.
+version source. Deployment checks out that exact tag. For an adopted repository,
+explicit approval of a validated development → main release integration authorizes
+its automatic pinned publication workflow, without a second publication approval.
+Deployment is included only where approved repository configuration enables it;
+existing manual and production gates remain. While a repository retains trunk
+behavior, ordinary Story approval does not authorize a main merge that publishes
+or deploys; obtain the applicable authorization before such a merge.
 Other consumers retain
 the earlier version-file write-back contract until they explicitly opt in.
 
