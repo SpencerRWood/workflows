@@ -2,7 +2,9 @@ name: Validate workflow contracts
 
 on:
   pull_request:
-    branches: [main]
+    branches: [development, main]
+  push:
+    branches: [development]
 
 permissions:
   contents: read

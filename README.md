@@ -6,8 +6,11 @@ implementation concerns, not workflow APIs. Consumers declare their required
 capabilities in `.github/release.toml` and should never reference implementation
 files in this repository.
 
-Consumers pin each public contract to its stable major version. Development
-happens on `main`; breaking contracts receive a new major tag. Consumers
+Consumers pin each public contract to its stable major version. The target
+lifecycle is working branch → development → protected main → automatic pinned
+release workflow. This repository adopts `development` for Story base/target through
+the [approved BR-02 setup](docs/br02-adoption-plan.md);
+breaking contracts receive a new major tag. Consumers
 must not use `@main` as their long-term contract.
 
 | Capability | Public reusable workflow |

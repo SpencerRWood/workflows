@@ -21,5 +21,6 @@
 
 ## Branching strategy
 
-- This repository uses **trunk-based development**. Create short-lived change branches from current `main` and target PRs to `main`.
+- This repository uses **integration-based development**. Read root `[tool.wood.branching]`, create short-lived Story branches from fetched `development` and target PRs to `development`. The approved scope is Wood Platform planning version 26, initiative 552; record live release and scope verification before claim activation.
+- Development PRs and pushes run validation only. A development → protected main release integration requires separate explicit approval and accumulated validation; ordinary Story approval does not authorize publication or deployment.
 - Follow the [canonical branching and delivery policy](https://github.com/SpencerRWood/codex-config/blob/main/docs/branching-policy.md), available through the installed codex-config source path. Verify the strategy, release association, fetched base and PR target before implementation and record them in Story evidence. Story completion does not authorize publication or deployment; retain existing review, CI, security and rollback requirements.

@@ -2,3 +2,13 @@
 domain = "engineering"
 capability = "release-control"
 kind = "workflow"
+
+[tool.wood.openproject]
+project_id = 3
+initiative_id = 552
+
+[tool.wood.branching]
+strategy = "integration"
+release_id = 26
+integration_branch = "development"
+scope_reference = "OP-555 activity 1414: explicit workflows development setup approval, 2026-10-14"
