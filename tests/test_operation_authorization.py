@@ -68,7 +68,7 @@ class OperationAuthorizationTests(unittest.TestCase):
                 self.assertEqual(jobs['authorization']['with'][key], '${{ inputs.' + key + ' }}')
             if 'validation' in jobs:
                 self.assertEqual(jobs['validation']['needs'], 'authorization')
-                self.assertEqual(jobs['release']['needs'], 'validation')
+                self.assertEqual(jobs['release']['needs'], ['authorization', 'validation'])
             else:
                 job = jobs.get('publish', jobs.get('deploy'))
                 self.assertEqual(job['needs'], 'authorization')
@@ -122,7 +122,9 @@ class OperationAuthorizationTests(unittest.TestCase):
     def test_helpers_bind_shared_revision_without_caller_revision(self):
         for name in ('release.yml', 'release-container.yml', 'container-release.yml', 'validate.yml'):
             document = workflow(ROOT, name)
-            steps = next(job['steps'] for job in document['jobs'].values() if 'steps' in job)
+            steps = next(job['steps'] for job in document['jobs'].values()
+                         if any('WORKFLOW_SHA' in step.get('env', {})
+                                for step in job.get('steps', [])))
             checkout = next(step for step in steps if 'WORKFLOW_SHA' in step.get('env', {}))
             self.assertEqual(checkout['env']['WORKFLOW_SHA'], '${{ inputs.workflow_revision }}')
             self.assertIn('"$RUNNER_TEMP/workflow-contract"', checkout['run'])
@@ -153,7 +155,7 @@ class OperationAuthorizationTests(unittest.TestCase):
                     self.assertEqual(result.returncode == 0,
                                      event == 'push' and ref == 'refs/heads/main' and bool(policy))
         self.assertEqual(steps[1]['with']['ref'], '${{ inputs.revision || github.sha }}')
-        policy = steps[2]
+        policy = next(step for step in steps if step['name'] == 'Verify repository-owned automatic update authorization')
         result = subprocess.run(['bash', '-c', policy['run']], capture_output=True,
                                 env={**os.environ, 'POLICY_COMMAND': 'exit 42'})
         self.assertEqual(result.returncode, 42)

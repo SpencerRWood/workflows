@@ -1,0 +1,16 @@
+version = 1
+
+[python]
+version = "3.14"
+dependency_group = "dev"
+
+[validation]
+checks = ["pytest"]
+
+[release]
+semantic_release = false
+
+[delivery]
+container_image = false
+infrastructure_promotion = false
+runtime_verification = false

@@ -26,6 +26,11 @@ reverse of the current public container release workflow.
 The [main branch policy](docs/branch-rules.md) records the protected consumer
 release model.
 
+The additive [BR-02 approved-release contract](docs/br02-release-contract.md)
+verifies exact protected-main integration before automatic publication and configured
+deployment, supports coordinated image recovery, and preserves existing caller defaults.
+Its examples are fixtures for future reviewed adoption; no consumer is migrated here.
+
 `deploy-ansible.yml` is the complementary reusable deployment contract. A
 consumer calls it only after a GitHub Release is published, passes an immutable
 release tag, its inventory/playbook, a target-specific concurrency group, and a

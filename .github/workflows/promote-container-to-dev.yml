@@ -3,6 +3,11 @@ name: Promote published container to infrastructure dev
 on:
   workflow_call:
     inputs:
+      workflow_revision:
+        description: Shared helper revision pinned to this reusable workflow.
+        type: string
+        required: false
+        default: v1
       infrastructure_repository:
         required: true
         type: string
@@ -66,7 +71,7 @@ jobs:
     steps:
       - name: Check out workflow implementation
         env:
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_SHA: ${{ inputs.workflow_revision }}
         run: |
           git init "$RUNNER_TEMP/workflow-contract"
           git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git

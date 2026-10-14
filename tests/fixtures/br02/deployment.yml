@@ -1,0 +1,32 @@
+# Fixture for a consumer's separately approved, standing automatic-dev policy.
+name: Configured dev deployment
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+    secrets:
+      release_read_token:
+        required: false
+permissions:
+  contents: read
+  deployments: write
+jobs:
+  deploy:
+    uses: SpencerRWood/workflows/.github/workflows/deploy-ansible.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    with:
+      workflow_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      release_integration: true
+      readiness_check: readiness / release-readiness
+      repository: ${{ github.repository }}
+      ref: ${{ inputs.release_tag }}
+      inventory_path: ansible/inventory/dev
+      playbook_path: ansible/playbooks/dev.yml
+      environment_name: infrastructure-dev
+      concurrency_group: deploy-infrastructure-dev
+      health_check_command: bash scripts/health-check-dev.sh
+      privileged_rollback_command: bash scripts/rollback-deployment.sh
+      deployment_state_file: /var/lib/github-actions-deployments/infrastructure-dev.json
+    secrets:
+      release_read_token: ${{ secrets.release_read_token }}

@@ -3,6 +3,47 @@ name: Validate and publish container release
 on:
   workflow_call:
     inputs:
+      image_name:
+        description: Optional image-name override for an independently validated declared image.
+        type: string
+        required: false
+        default: ''
+      dockerfile:
+        description: Optional Dockerfile override for a declared image.
+        type: string
+        required: false
+        default: ''
+      context:
+        type: string
+        required: false
+        default: ''
+      expected_tag:
+        description: Shared release identity for coordinated image publication.
+        type: string
+        required: false
+        default: ''
+      finalize_release:
+        description: False stages verified images for a coordinated multi-image finalization.
+        type: boolean
+        required: false
+        default: true
+      release_integration:
+        description: Automatically publish only an independently verified approved main integration.
+        type: boolean
+        required: false
+        default: false
+      readiness_check:
+        type: string
+        required: false
+        default: release-readiness
+      hotfix_incident:
+        type: string
+        required: false
+        default: ''
+      hotfix_approval:
+        type: string
+        required: false
+        default: ''
       workflow_revision:
         description: Shared helper revision; pin to the same SHA as this workflow.
         type: string
@@ -57,6 +98,8 @@ on:
       version_image_digest:
         value: ${{ jobs.release.outputs.version_image_digest }}
     secrets:
+      release_read_token:
+        required: false
       release_app_private_key:
         required: false
       dbt_host:
@@ -76,18 +119,28 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.repository }}-${{ github.ref }}
+  group: ${{ inputs.finalize_release && format('release-{0}-{1}', github.repository, github.ref) || format('release-image-{0}-{1}-{2}', github.repository, github.ref, inputs.image_name) }}
   cancel-in-progress: false
 
 jobs:
   authorization:
     uses: ./.github/workflows/authorize-operation.yml
     with:
+      workflow_revision: ${{ inputs.workflow_revision }}
+      evidence_key: container-${{ inputs.image_name || 'default' }}
+      release_integration: ${{ inputs.release_integration }}
+      readiness_check: ${{ inputs.readiness_check }}
+      hotfix_incident: ${{ inputs.hotfix_incident }}
+      hotfix_approval: ${{ inputs.hotfix_approval }}
       require_approval: ${{ inputs.require_approval }}
       approved: ${{ inputs.approved }}
+    secrets:
+      release_read_token: ${{ secrets.release_read_token }}
 
   validation:
     needs: authorization
+    permissions:
+      contents: read
     uses: ./.github/workflows/validate.yml
     with:
       workflow_revision: ${{ inputs.workflow_revision }}
@@ -101,7 +154,7 @@ jobs:
 
   release:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: validation
+    needs: [authorization, validation]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -110,13 +163,13 @@ jobs:
       attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
-      APPROVAL_REQUIRED: ${{ inputs.require_approval }}
-      APPROVED_REVISION: ${{ inputs.approved_revision }}
-      RECOVERY_APPROVED: ${{ inputs.recovery_approved }}
+      APPROVAL_REQUIRED: ${{ inputs.require_approval || inputs.release_integration }}
+      APPROVED_REVISION: ${{ needs.authorization.outputs.approved_revision || inputs.approved_revision }}
+      RECOVERY_APPROVED: ${{ inputs.recovery_approved || inputs.release_integration }}
       RELEASE_REF: ${{ github.ref }}
     outputs:
       released: ${{ steps.publish.outputs.released || 'false' }}
-      release_tag: ${{ steps.publish.outputs.release_tag }}
+      release_tag: ${{ steps.publish.outputs.release_tag || steps.version.outputs.release_tag }}
       image_repository: ${{ steps.image.outputs.image_repository }}
       version_image: ${{ steps.image.outputs.version_image }}
       image_digest: ${{ steps.digest.outputs.digest }}
@@ -189,15 +242,22 @@ jobs:
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_TAG: ${{ needs.authorization.outputs.release_tag || inputs.expected_tag }}
         run: |
           set -euo pipefail
           python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
           tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+          if [[ -n "$EXPECTED_TAG" ]]; then test "$tag" = "$EXPECTED_TAG"; fi
           [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
             echo "semantic-release did not determine a stable release tag: $tag" >&2
             exit 1
           }
           if git show-ref --verify --quiet "refs/tags/$tag"; then
+            if [[ "${{ inputs.release_integration }}" == true && "$(git rev-parse "refs/tags/$tag^{commit}")" = "$APPROVED_REVISION" ]]; then
+              echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+              echo "recover=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq 'select(.draft == false and .prerelease == false) | .id' > "$RUNNER_TEMP/release-evidence/existing-release.txt"
             test -s "$RUNNER_TEMP/release-evidence/existing-release.txt" || {
               echo 'Existing Git tag lacks a completed Release; stop for separately authorized finalization.' >&2
@@ -209,7 +269,7 @@ jobs:
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Prepare semantic release metadata without a commit or tag
-        if: steps.version.outputs.release_tag != ''
+        if: steps.version.outputs.release_tag != '' && steps.version.outputs.recover != 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -218,7 +278,7 @@ jobs:
           uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --no-commit --no-tag --no-push --no-vcs-release --skip-build
 
       - name: Lock prepared version before building the candidate
-        if: steps.version.outputs.release_tag != ''
+        if: steps.version.outputs.release_tag != '' && steps.version.outputs.recover != 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: |
           set -euo pipefail
@@ -232,22 +292,22 @@ jobs:
         env:
           REQUIRE_RELEASE: "false"
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-          IMAGE_NAME: ${{ steps.config.outputs.container_image_name }}
-          DOCKERFILE: ${{ steps.config.outputs.container_dockerfile }}
-          BUILD_CONTEXT: ${{ steps.config.outputs.container_context }}
+          IMAGE_NAME: ${{ inputs.image_name || steps.config.outputs.container_image_name }}
+          DOCKERFILE: ${{ inputs.dockerfile || steps.config.outputs.container_dockerfile }}
+          BUILD_CONTEXT: ${{ inputs.context || steps.config.outputs.container_context }}
           PLATFORMS: ${{ steps.config.outputs.container_platforms }}
         run: python3 "$RUNNER_TEMP/workflow-contract/scripts/container_release.py"
 
       - name: Snapshot prepared candidate inputs
         id: provenance
-        if: steps.version.outputs.release_tag != '' && inputs.require_approval
+        if: steps.version.outputs.release_tag != '' && steps.version.outputs.recover != 'true' && (inputs.require_approval || inputs.release_integration)
         env:
-          SOURCE_REVISION: ${{ inputs.approved_revision }}
+          SOURCE_REVISION: ${{ needs.authorization.outputs.approved_revision || inputs.approved_revision }}
           WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           WORKING_DIRECTORY: ${{ steps.config.outputs.working_directory }}
-          DOCKERFILE: ${{ steps.config.outputs.container_dockerfile }}
-          BUILD_CONTEXT: ${{ steps.config.outputs.container_context }}
+          DOCKERFILE: ${{ inputs.dockerfile || steps.config.outputs.container_dockerfile }}
+          BUILD_CONTEXT: ${{ inputs.context || steps.config.outputs.container_context }}
           PLATFORMS: ${{ steps.config.outputs.container_platforms }}
         run: |
           test "$(git -C "$RUNNER_TEMP/workflow-contract" rev-parse HEAD)" = "$WORKFLOW_REVISION"
@@ -278,13 +338,26 @@ jobs:
         if: steps.version.outputs.release_tag != '' && steps.existing.outputs.digest == ''
         run: python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
 
+      - name: Recover signed inputs after partial Git publication
+        if: steps.version.outputs.recover == 'true'
+        env:
+          SOURCE_REVISION: ${{ needs.authorization.outputs.approved_revision }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.image_repository }}
+          IMAGE_DIGEST: ${{ steps.existing.outputs.digest }}
+          DOCKERFILE: ${{ inputs.dockerfile || steps.config.outputs.container_dockerfile }}
+          BUILD_CONTEXT: ${{ inputs.context || steps.config.outputs.container_context }}
+          PLATFORMS: ${{ steps.config.outputs.container_platforms }}
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" recover --evidence "$RUNNER_TEMP/release-evidence"
+
       - name: Build candidate image once
         id: candidate
         if: steps.version.outputs.release_tag != '' && steps.existing.outputs.digest == ''
         uses: docker/build-push-action@v7.4.0
         with:
-          context: ${{ inputs.require_approval && format('{0}/candidate-inputs/{1}', runner.temp, steps.config.outputs.container_context) || steps.config.outputs.container_context }}
-          file: ${{ inputs.require_approval && format('{0}/candidate-inputs/{1}', runner.temp, steps.config.outputs.container_dockerfile) || steps.config.outputs.container_dockerfile }}
+          context: ${{ (inputs.require_approval || inputs.release_integration) && format('{0}/candidate-inputs/{1}', runner.temp, inputs.context || steps.config.outputs.container_context) || inputs.context || steps.config.outputs.container_context }}
+          file: ${{ (inputs.require_approval || inputs.release_integration) && format('{0}/candidate-inputs/{1}', runner.temp, inputs.dockerfile || steps.config.outputs.container_dockerfile) || inputs.dockerfile || steps.config.outputs.container_dockerfile }}
           push: true
           provenance: mode=max
           sbom: true
@@ -312,7 +385,7 @@ jobs:
           echo "digest=$actual" >> "$GITHUB_OUTPUT"
 
       - name: Capture candidate build receipt
-        if: inputs.require_approval && steps.candidate.outputs.digest != ''
+        if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != ''
         env:
           IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
           BUILD_METADATA: ${{ steps.candidate.outputs.metadata }}
@@ -320,7 +393,7 @@ jobs:
 
       - name: Attest candidate build provenance
         id: build_attestation
-        if: inputs.require_approval && steps.candidate.outputs.digest != ''
+        if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != ''
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ steps.image.outputs.image_repository }}
@@ -330,7 +403,7 @@ jobs:
 
       - name: Sign prepared candidate identity
         id: receipt_attestation
-        if: inputs.require_approval && steps.candidate.outputs.digest != ''
+        if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != ''
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ steps.image.outputs.image_repository }}
@@ -341,7 +414,7 @@ jobs:
           create-storage-record: false
 
       - name: Verify signed candidate identity and actual package
-        if: steps.version.outputs.release_tag != '' && inputs.require_approval
+        if: steps.version.outputs.release_tag != '' && (inputs.require_approval || inputs.release_integration)
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REPOSITORY: ${{ steps.image.outputs.image_repository }}
@@ -400,7 +473,7 @@ jobs:
       - name: Finalize semantic-release and GitHub Release
         id: publish
         timeout-minutes: 10
-        if: steps.version.outputs.release_tag != ''
+        if: steps.version.outputs.release_tag != '' && inputs.finalize_release
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
           RELEASE_GIT_AUTH: ${{ inputs.release_git_auth }}
@@ -408,6 +481,7 @@ jobs:
           WORKFLOW_TOKEN: ${{ github.token }}
           EXPECTED_TAG: ${{ steps.version.outputs.release_tag }}
           RELEASE_REF: ${{ github.ref }}
+          RELEASE_INTEGRATION: ${{ inputs.release_integration }}
         run: |
           set -euo pipefail
           if [[ "$RELEASE_GIT_AUTH" == github-app ]]; then
@@ -422,7 +496,11 @@ jobs:
           python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
           actual_tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
           test "$actual_tag" = "$EXPECTED_TAG" || { echo "semantic-release version changed during validation: $EXPECTED_TAG -> $actual_tag" >&2; exit 1; }
-          if ! uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release; then
+          if [[ "$RELEASE_INTEGRATION" == true ]]; then
+            # The supported exact-main path uses --no-commit --no-changelog --skip-build
+            # and reconciles an existing tag/Release through the OP-517 helper.
+            python "$RUNNER_TEMP/workflow-contract/scripts/release_publish.py" "$RUNNER_TEMP/semantic-release-config.json" --tag-merged-commit
+          elif ! uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --vcs-release; then
             echo "Publication failed after image validation. The image tags remain; inspect Git tag and GitHub Release before retrying." >&2
             exit 1
           fi
@@ -445,7 +523,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.image_name && format('publication-evidence-{0}-{1}-{2}', inputs.image_name, github.run_id, github.run_attempt) || format('publication-evidence-{0}-{1}', github.run_id, github.run_attempt) }}
           path: |
             ${{ runner.temp }}/release-evidence/
             ${{ steps.build_attestation.outputs.bundle-path }}

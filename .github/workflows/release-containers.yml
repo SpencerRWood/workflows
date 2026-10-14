@@ -1,0 +1,172 @@
+name: Publish coordinated container images
+
+on:
+  workflow_call:
+    inputs:
+      workflow_revision:
+        description: Immutable helper SHA pinned to this reusable workflow.
+        type: string
+        required: true
+      images:
+        description: JSON array of existing image_name, dockerfile and context inputs.
+        type: string
+        required: true
+      readiness_check:
+        type: string
+        required: false
+        default: release-readiness
+      hotfix_incident:
+        type: string
+        required: false
+        default: ''
+      hotfix_approval:
+        type: string
+        required: false
+        default: ''
+    outputs:
+      released:
+        value: ${{ jobs.finalize.outputs.released }}
+      release_tag:
+        value: ${{ jobs.finalize.outputs.release_tag }}
+    secrets:
+      dbt_host:
+        required: false
+      dbt_user:
+        required: false
+      dbt_password:
+        required: false
+      dbt_port:
+        required: false
+      dbt_dbname:
+        required: false
+      dbt_schema:
+        required: false
+      release_read_token:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coordinated-release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authorization:
+    uses: ./.github/workflows/authorize-operation.yml
+    with:
+      workflow_revision: ${{ inputs.workflow_revision }}
+      release_integration: true
+      readiness_check: ${{ inputs.readiness_check }}
+      hotfix_incident: ${{ inputs.hotfix_incident }}
+      hotfix_approval: ${{ inputs.hotfix_approval }}
+      evidence_key: coordinated-images
+    secrets:
+      release_read_token: ${{ secrets.release_read_token }}
+
+  plan:
+    needs: authorization
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.plan.outputs.images }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out pinned helpers
+        env:
+          WORKFLOW_SHA: ${{ inputs.workflow_revision }}
+        run: |
+          git init "$RUNNER_TEMP/workflow-contract"
+          git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
+          git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v9.0.0
+      - name: Load existing release inputs
+        id: config
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
+      - name: Resolve one semantic release identity without publishing
+        id: plan
+        working-directory: ${{ steps.config.outputs.working_directory }}
+        env:
+          IMAGES: ${{ inputs.images }}
+          APPROVED_REVISION: ${{ needs.authorization.outputs.approved_revision }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$APPROVED_REVISION"
+          uv sync --frozen --group "${{ steps.config.outputs.dependency_group }}"
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
+          tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if git show-ref --verify --quiet "refs/tags/$tag" && [[ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$APPROVED_REVISION" ]]; then
+            git merge-base --is-ancestor "refs/tags/$tag^{commit}" "$APPROVED_REVISION"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq 'select(.draft == false and .prerelease == false) | .id' > "$RUNNER_TEMP/existing-release"
+            test -s "$RUNNER_TEMP/existing-release"
+            exit 0
+          fi
+          # Exact-revision retries verify every image before finalization,
+          # even when the Git tag or GitHub Release already exists.
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          cd "$(git rev-parse --show-toplevel)"
+          PYTHONPATH="$RUNNER_TEMP/workflow-contract/scripts" python -c 'import json, os; from release_images import image_matrix; images=image_matrix(os.environ["IMAGES"]); output=open(os.environ["GITHUB_OUTPUT"], "a"); output.write("images=" + json.dumps(images, separators=(",", ":")) + "\n")'
+
+  images:
+    needs: plan
+    if: needs.plan.outputs.tag != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-container.yml
+    with:
+      workflow_revision: ${{ inputs.workflow_revision }}
+      release_integration: true
+      readiness_check: ${{ inputs.readiness_check }}
+      hotfix_incident: ${{ inputs.hotfix_incident }}
+      hotfix_approval: ${{ inputs.hotfix_approval }}
+      expected_tag: ${{ needs.plan.outputs.tag }}
+      image_name: ${{ matrix.image.image_name }}
+      dockerfile: ${{ matrix.image.dockerfile }}
+      context: ${{ matrix.image.context }}
+      finalize_release: false
+    secrets:
+      dbt_host: ${{ secrets.dbt_host }}
+      dbt_user: ${{ secrets.dbt_user }}
+      dbt_password: ${{ secrets.dbt_password }}
+      dbt_port: ${{ secrets.dbt_port }}
+      dbt_dbname: ${{ secrets.dbt_dbname }}
+      dbt_schema: ${{ secrets.dbt_schema }}
+      release_read_token: ${{ secrets.release_read_token }}
+
+  finalize:
+    needs: [plan, images]
+    if: needs.plan.outputs.tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      workflow_revision: ${{ inputs.workflow_revision }}
+      release_integration: true
+      readiness_check: ${{ inputs.readiness_check }}
+      hotfix_incident: ${{ inputs.hotfix_incident }}
+      hotfix_approval: ${{ inputs.hotfix_approval }}
+      expected_tag: ${{ needs.plan.outputs.tag }}
+    secrets:
+      dbt_host: ${{ secrets.dbt_host }}
+      dbt_user: ${{ secrets.dbt_user }}
+      dbt_password: ${{ secrets.dbt_password }}
+      dbt_port: ${{ secrets.dbt_port }}
+      dbt_dbname: ${{ secrets.dbt_dbname }}
+      dbt_schema: ${{ secrets.dbt_schema }}
+      release_read_token: ${{ secrets.release_read_token }}

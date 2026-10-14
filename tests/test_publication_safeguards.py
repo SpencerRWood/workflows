@@ -242,6 +242,32 @@ class ProvenanceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     provenance.verify_finalized(self.root, self.identity)
 
+    def test_exact_source_tag_retains_prepared_image_identity_without_main_metadata_commit(self):
+        with (patch.object(provenance, "command", side_effect=[self.source, "b" * 40,
+                    self.source + "\trefs/tags/v0.6.0"]),
+              patch.object(provenance, "is_current", return_value=True),
+              patch.object(provenance, "inputs") as files):
+            provenance.verify_finalized(self.root, self.identity)
+            files.assert_not_called()
+
+    def test_recovered_receipt_requires_exact_source_workflow_version_and_manifest(self):
+        environment = {"GITHUB_REPOSITORY": self.identity["repository"],
+                       "SOURCE_REVISION": self.identity["source_sha"],
+                       "WORKFLOW_REVISION": self.identity["workflow_sha"],
+                       "RELEASE_TAG": self.identity["version"], "IMAGE_REPOSITORY": self.repository,
+                       "DOCKERFILE": self.identity["dockerfile"], "BUILD_CONTEXT": self.identity["build_context"],
+                       "PLATFORMS": ",".join(self.identity["platforms"])}
+        with patch.object(provenance, "command", return_value=json.dumps(self.results)):
+            with tempfile.TemporaryDirectory() as temporary:
+                recovered = provenance.recover_identity(environment, self.digest, Path(temporary))
+                self.assertEqual(recovered, self.identity)
+                self.assertTrue((Path(temporary) / "identity.json").exists())
+            for field in ("SOURCE_REVISION", "WORKFLOW_REVISION", "RELEASE_TAG", "DOCKERFILE", "BUILD_CONTEXT", "PLATFORMS"):
+                changed = {**environment, field: "e" * 40 if "REVISION" in field else "different"}
+                with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary, self.assertRaises(ValueError):
+                    provenance.recover_identity(changed, self.digest, Path(temporary))
+
+
     def test_preparation_cannot_introduce_unreviewed_code_or_dependency_changes(self):
         for name, value in [
             ("app.py", "changed code\n"),
@@ -353,6 +379,39 @@ class ProvenanceTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_multi_image_interruption_recovers_each_missing_digest_independently(self):
+        digest = "sha256:" + "a" * 64
+        state, writes = {}, []
+
+        def publish(command, **kwargs):
+            tag = command[5]
+            writes.append(tag)
+            if "worker:sha-" in tag and len(writes) == 4:
+                raise subprocess.CalledProcessError(1, command)
+            state[tag] = digest
+
+        with (tempfile.TemporaryDirectory() as temporary,
+              patch.object(registry, "inspect_digest", side_effect=lambda tag: state.get(tag)),
+              patch.object(registry, "require_current"),
+              patch.object(registry.subprocess, "run", side_effect=publish)):
+            for name in ("api", "worker"):
+                evidence = Path(temporary) / name
+                evidence.mkdir()
+                tags = [f"ghcr.io/owner/{name}:v1.0.0", f"ghcr.io/owner/{name}:sha-source"]
+                if name == "worker":
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        registry.promote(f"ghcr.io/owner/{name}@{digest}", tags, digest, True, evidence)
+                else:
+                    registry.promote(f"ghcr.io/owner/{name}@{digest}", tags, digest, True, evidence)
+            self.assertEqual(len(state), 3)
+            before = len(writes)
+            for name in ("api", "worker"):
+                tags = [f"ghcr.io/owner/{name}:v1.0.0", f"ghcr.io/owner/{name}:sha-source"]
+                registry.promote(f"ghcr.io/owner/{name}@{digest}", tags, digest, True, Path(temporary) / name)
+            self.assertEqual(len(writes), before + 1)
+            self.assertEqual(len(state), 4)
+            self.assertEqual(set(state.values()), {digest})
+
     def test_unknown_authentication_never_means_missing_candidate(self):
         with patch.object(
             registry.subprocess,
