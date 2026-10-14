@@ -135,6 +135,8 @@ def load_config(config_path: Path) -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path, help="Path to .github/release.toml")
+    parser.add_argument("--validation-only", action="store_true",
+                        help="Validate repository checks without requiring publication capabilities.")
     args = parser.parse_args()
     config = load_config(args.config)
 
@@ -181,7 +183,7 @@ def main() -> None:
     checks = strings(validation.get("checks"), "validation.checks", VALID_CHECKS)
     if "pytest-coverage" in checks and "pytest" not in checks:
         fail("validation.checks must include pytest when it includes pytest-coverage.")
-    if not boolean(release.get("semantic_release"), "release.semantic_release"):
+    if not boolean(release.get("semantic_release"), "release.semantic_release") and not args.validation_only:
         fail("release.semantic_release must be true for the canonical release contract.")
 
     root = args.config.parent.parent

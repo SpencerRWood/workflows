@@ -55,6 +55,7 @@ class NamingTests(unittest.TestCase):
         self.assertEqual(
             re.findall(r"^      ([a-z_]+):$", inputs, re.MULTILINE),
             [
+                "workflow_revision",
                 "infrastructure_repository",
                 "infrastructure_base_branch",
                 "image_key",

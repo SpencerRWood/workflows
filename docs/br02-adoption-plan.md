@@ -53,6 +53,13 @@ This authorization does not approve development → main release integration,
 publication or deployment. The original preparation sequence below records the
 gates and ownership; its setup approval is now supplied by activity 1414.
 
+The OP-555 implementation now supplies the previously missing validation-only
+contract and locked contract-test dependencies, with direct CI in `validate.yml`.
+Its additive release interfaces and safe caller fixtures are documented in the
+[BR-02 release contract](br02-release-contract.md). The historical inspection and
+setup sequence above remain evidence of the starting point. Live protection
+provisioning, consumer migration and publication retain their separate gates.
+
 1. Review this documentation batch and approve its commit/push/PR to main using
    the existing trunk arrangement. The repository currently has no push publishing
    caller; recheck before delivery. Preparation approval does not authorize live

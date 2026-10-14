@@ -1,0 +1,40 @@
+# Fixture only: a consumer's approved standing deployment policy after publication.
+name: Publish and deploy approved release
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  release:
+    permissions:
+      contents: write
+    uses: SpencerRWood/workflows/.github/workflows/release.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    with:
+      workflow_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      release_integration: true
+      readiness_check: readiness / release-readiness
+    secrets:
+      release_read_token: ${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}
+  deploy:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    permissions:
+      contents: read
+      deployments: write
+    uses: SpencerRWood/workflows/.github/workflows/deploy-ansible.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    with:
+      workflow_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      release_integration: true
+      readiness_check: readiness / release-readiness
+      repository: ${{ github.repository }}
+      ref: ${{ needs.release.outputs.release_tag }}
+      inventory_path: ansible/inventory/dev
+      playbook_path: ansible/playbooks/dev.yml
+      environment_name: infrastructure-dev
+      concurrency_group: deploy-infrastructure-dev
+      health_check_command: bash scripts/health-check-dev.sh
+      privileged_rollback_command: bash scripts/rollback-deployment.sh
+      deployment_state_file: /var/lib/github-actions-deployments/infrastructure-dev.json
+    secrets:
+      release_read_token: ${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}

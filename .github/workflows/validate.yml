@@ -1,6 +1,10 @@
 name: Validate
 
 on:
+  pull_request:
+    branches: [development, main]
+  push:
+    branches: [development]
   workflow_call:
     inputs:
       workflow_revision:
@@ -39,8 +43,31 @@ on:
         required: false
 
 jobs:
+  contracts:
+    name: ${{ inputs.workflow_revision == '' && 'validation' || 'workflow-contracts' }}
+    if: inputs.workflow_revision == ''
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v9.0.0
+      - name: Install locked contract-test dependencies
+        run: uv sync --frozen --group dev
+      - name: Test workflow contracts
+        run: uv run --frozen pytest -p no:cacheprovider
+      - name: Validate workflow YAML
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$RUNNER_TEMP/bin/actionlint" -shellcheck=
+
   validation:
-    name: validation
+    if: inputs.workflow_revision != ''
+    name: ${{ inputs.workflow_revision != '' && 'validation' || 'consumer-validation' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out workflow implementation
@@ -75,7 +102,7 @@ jobs:
 
       - name: Load release configuration
         id: config
-        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml --validation-only
 
       - name: Set up Python
         uses: actions/setup-python@v6

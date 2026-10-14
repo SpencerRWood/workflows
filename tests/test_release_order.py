@@ -105,7 +105,7 @@ class ReleaseOrderTests(unittest.TestCase):
         self.assertIn("git add uv.lock", INTEGRATED)
         self.assertIn("version --vcs-release", INTEGRATED)
         self.assertEqual(INTEGRATED.count("docker/build-push-action@"), 1)
-        self.assertIn("needs: validation", INTEGRATED)
+        self.assertIn("needs: [authorization, validation]", INTEGRATED)
 
     def test_failures_block_publication_and_promotion(self) -> None:
         self.assertIn(
@@ -122,7 +122,7 @@ class ReleaseOrderTests(unittest.TestCase):
             "released: ${{ steps.publish.outputs.released || 'false' }}", INTEGRATED
         )
         self.assertIn("cancel-in-progress: false", INTEGRATED)
-        self.assertIn("release-${{ github.repository }}-${{ github.ref }}", INTEGRATED)
+        self.assertIn("format('release-{0}-{1}', github.repository, github.ref)", INTEGRATED)
 
     def test_tested_digest_is_tagged_and_exported(self) -> None:
         self.assertIn(

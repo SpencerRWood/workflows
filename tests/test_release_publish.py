@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import subprocess
@@ -14,6 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import release_publish as publication
+REAL_SEMANTIC = publication.semantic
 
 
 class PublicationTests(unittest.TestCase):
@@ -82,10 +84,16 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(tag, "v0.19.0")
         return self.published
 
-    def semantic(self, config: Path, *args: str, cwd: Path | None = None) -> str:
+    def semantic(self, config: Path, *args: str, cwd: Path | None = None, readonly: bool = False) -> str:
         self.calls.append(args)
         if "--print-tag" in args:
             return "v0.19.0"
+        if args[0] == "publish":
+            paths = json.loads(config.read_text())["semantic_release"]["publish"]["dist_glob_patterns"]
+            for path in paths:
+                self.published.setdefault("assets", []).append({"name": Path(path).name,
+                    "digest": "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()})
+            return ""
         if args[0] == "changelog":
             if self.notes_failures:
                 self.notes_failures -= 1
@@ -124,6 +132,122 @@ class PublicationTests(unittest.TestCase):
 
     def run_publish(self, expected: str = "") -> tuple[bool, str]:
         return publication.publish(self.config, "refs/heads/main", False, expected)
+
+    def test_approved_exact_main_publication_and_tag_failure_retry_keep_one_revision(self):
+        self.failure = "tag_push"
+        with patch.dict(os.environ, {"APPROVAL_REQUIRED": "true", "APPROVED_REVISION": self.application}):
+            with self.assertRaises(subprocess.CalledProcessError):
+                publication.publish(self.config, "refs/heads/main", True)
+            self.assertEqual(self.git("rev-parse", "HEAD"), self.application)
+            self.assertEqual(publication.remote_tag("v0.19.0"), self.application)
+            self.failure = ""
+            self.calls.clear()
+            self.assertEqual(publication.publish(self.config, "refs/heads/main", True), (True, "v0.19.0"))
+            self.assertEqual(self.calls, [("version", "--print-tag"), ("changelog", "--post-to-release-tag", "v0.19.0")])
+            self.calls.clear()
+            self.assertEqual(publication.publish(self.config, "refs/heads/main", True), (True, "v0.19.0"))
+            self.assertEqual(self.calls, [("version", "--print-tag")])
+            self.assertEqual(self.git("rev-parse", "HEAD"), self.application)
+
+    def test_coordinated_tag_mismatch_fails_before_any_publication(self):
+        with patch.dict(os.environ, {"EXPECTED_TAG": "v0.20.0"}):
+            with self.assertRaisesRegex(ValueError, "coordinated"):
+                publication.publish(self.config, "refs/heads/main", True)
+        self.assertEqual(self.calls, [("version", "--print-tag")])
+        self.assertIsNone(publication.remote_tag("v0.19.0"))
+
+    def test_explicit_configured_build_is_preserved_on_exact_main_path(self):
+        config = json.loads(self.config.read_text())
+        config["semantic_release"]["build_command"] = "python scripts/build_distribution.py"
+        self.config.write_text(json.dumps(config))
+        with patch.dict(os.environ, {"RELEASE_INTEGRATION": "true", "APPROVED_REVISION": self.application,
+                                     "APPROVAL_REQUIRED": "true"}):
+            publication.publish(self.config, "refs/heads/main", True)
+        command = next(c for c in self.calls if c[:2] == ("version", "--vcs-release"))
+        self.assertIn("--no-commit", command)
+        self.assertNotIn("--skip-build", command)
+        self.assertEqual(publication.remote_tag("v0.19.0"), self.application)
+
+    def test_real_psr_builds_configured_library_asset_without_changing_approved_revision(self):
+        self.git("remote", "set-url", "origin", "https://github.com/example/fixture.git")
+        config = json.loads(self.config.read_text())
+        config["semantic_release"].update({"allow_zero_version": True,
+            "build_command": "python -c 'from pathlib import Path; import tomllib; "
+                             "v=tomllib.loads(Path(\"pyproject.toml\").read_text())[\"project\"][\"version\"]; "
+                             "Path(\"dist\").mkdir(exist_ok=True); Path(\"dist/package.txt\").write_text(v)'",
+            "assets": ["dist/package.txt"]})
+        self.config.write_text(json.dumps(config))
+        revision = self.git("rev-parse", "HEAD")
+        subprocess.run([sys.executable, "-m", "semantic_release", "--config", str(self.config), "version",
+                        "--no-commit", "--no-changelog", "--no-push", "--no-vcs-release"],
+                       check=True, capture_output=True)
+        self.assertEqual(Path("dist/package.txt").read_text(), "0.19.0")
+        self.assertEqual(self.git("rev-parse", "v0.19.0^{commit}"), revision)
+        self.assertEqual(self.git("rev-parse", "HEAD"), revision)
+
+    def test_configured_assets_are_recovered_idempotently_without_replacement(self):
+        Path("dist").mkdir()
+        Path("dist/package.txt").write_text("package bytes")
+        config = json.loads(self.config.read_text())
+        config["semantic_release"]["assets"] = ["dist/package.txt"]
+        self.config.write_text(json.dumps(config))
+        with patch.dict(os.environ, {"RELEASE_INTEGRATION": "true", "APPROVED_REVISION": self.application,
+                                     "APPROVAL_REQUIRED": "true"}):
+            self.assertEqual(publication.publish(self.config, "refs/heads/main", True), (True, "v0.19.0"))
+            self.assertEqual(len(self.published["assets"]), 1)
+            self.calls.clear()
+            publication.publish(self.config, "refs/heads/main", True)
+            self.assertEqual(self.calls, [("version", "--print-tag")])
+            self.published["assets"][0]["digest"] = "sha256:" + "f" * 64
+            with self.assertRaisesRegex(ValueError, "never replace"):
+                publication.publish(self.config, "refs/heads/main", True)
+            self.assertEqual(len(self.published["assets"]), 1)
+
+    def test_fresh_retry_rebuilds_real_configured_asset_at_original_version(self):
+        (Path(".venv")).symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+        config = json.loads(self.config.read_text())
+        config["semantic_release"].update({"allow_zero_version": True,
+            "remote": {"url": "https://github.com/example/fixture.git"},
+            "assets": ["dist/package.txt"],
+            "build_command": "python -c 'from pathlib import Path; import tomllib; "
+                "v=tomllib.loads(Path(\"pyproject.toml\").read_text())[\"project\"][\"version\"]; "
+                "Path(\"dist\").mkdir(); Path(\"dist/package.txt\").write_text(v)'"})
+        self.config.write_text(json.dumps(config))
+        self.git("tag", "v0.19.0")
+        self.git("push", "origin", "refs/tags/v0.19.0")
+        def execute(config, *args, **kwargs):
+            if kwargs.get("cwd"):
+                return REAL_SEMANTIC(config, *args, **kwargs)
+            return self.semantic(config, *args, **kwargs)
+        with patch.object(publication, "semantic", execute), patch.dict(os.environ, {
+            "RELEASE_INTEGRATION": "true", "APPROVAL_REQUIRED": "true", "APPROVED_REVISION": self.application}):
+            self.assertEqual(publication.publish(self.config, "refs/heads/main", True), (True, "v0.19.0"))
+        self.assertEqual(Path("dist/package.txt").read_text(), "0.19.0")
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.application)
+        self.assertEqual(self.git("rev-parse", "v0.19.0^{commit}"), self.application)
+        self.assertEqual(len(self.published["assets"]), 1)
+
+    def test_real_psr_preserves_approved_head_across_successive_tag_only_releases(self):
+        self.git("remote", "set-url", "origin", "https://github.com/example/fixture.git")
+        config = json.loads(self.config.read_text())
+        config["semantic_release"].update({"allow_zero_version": True, "major_on_zero": True})
+        self.config.write_text(json.dumps(config))
+
+        def psr(*args):
+            return subprocess.check_output([sys.executable, "-m", "semantic_release", "--config",
+                                            str(self.config), "version", *args], text=True).strip()
+
+        for message, tag in [(None, "v0.19.0"), ("fix: correction", "v0.19.1"),
+                             ("feat!: changed interface\n\nBREAKING CHANGE: interface removed", "v1.0.0")]:
+            if message:
+                self.git("commit", "--allow-empty", "-m", message)
+            revision = self.git("rev-parse", "HEAD")
+            self.assertEqual(psr("--print-tag"), tag)
+            psr("--no-commit", "--no-changelog", "--skip-build", "--no-push", "--no-vcs-release")
+            self.assertEqual(self.git("rev-parse", f"refs/tags/{tag}^{{commit}}"), revision)
+            self.assertEqual(self.git("rev-parse", "HEAD"), revision)
+        self.git("commit", "--allow-empty", "-m", "docs: no release impact")
+        self.assertEqual(psr("--print-tag"), "v1.0.0")
 
     def test_failure_after_version_push_recovers_without_another_commit(self) -> None:
         self.failure = "version_push"
