@@ -67,23 +67,8 @@ def inputs(root: Path) -> list[dict]:
     return result
 
 
-def prepare(root: Path, snapshot: Path, environment: dict[str, str]) -> dict:
-    source, workflow = environment["SOURCE_REVISION"], environment["WORKFLOW_REVISION"]
-    if not SHA.fullmatch(source) or not SHA.fullmatch(workflow):
-        raise ValueError("source and workflow revisions must be immutable full SHAs")
-    if command("git", "-C", str(root), "rev-parse", "HEAD") != source:
-        raise ValueError("prepared source differs from approved source")
-    version = environment["RELEASE_TAG"]
-    if not re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version):
-        raise ValueError("stable release version required")
-    files = inputs(root)
-    by_path = {f["path"]: f for f in files}
-    directory = Path(environment.get("WORKING_DIRECTORY", "."))
-    dockerfile = environment["DOCKERFILE"]
-    context = environment["BUILD_CONTEXT"]
-    for name in (dockerfile, context, str(directory)):
-        if Path(name).is_absolute() or ".." in Path(name).parts:
-            raise ValueError("build paths must be repository relative")
+def python_metadata(root: Path, directory: Path, version: str, by_path: dict) -> tuple:
+    """Permit only the existing declared Python version preparation."""
     lock = str(directory / "uv.lock")
     project = tomllib.loads((root / directory / "pyproject.toml").read_text())[
         "project"
@@ -139,6 +124,49 @@ def prepare(root: Path, snapshot: Path, environment: dict[str, str]) -> dict:
         after[parts[-1]] = before[parts[-1]]
         if prepared != original:
             raise ValueError("version preparation changed undeclared TOML fields")
+    return allowed, {"lockfile": by_path[lock], "package_name": project["name"]}
+
+
+def prepare(root: Path, snapshot: Path, environment: dict[str, str]) -> dict:
+    source, workflow = environment["SOURCE_REVISION"], environment["WORKFLOW_REVISION"]
+    if not SHA.fullmatch(source) or not SHA.fullmatch(workflow):
+        raise ValueError("source and workflow revisions must be immutable full SHAs")
+    if command("git", "-C", str(root), "rev-parse", "HEAD") != source:
+        raise ValueError("prepared source differs from approved source")
+    version = environment["RELEASE_TAG"]
+    if not re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version):
+        raise ValueError("stable release version required")
+    files = inputs(root)
+    by_path = {f["path"]: f for f in files}
+    directory = Path(environment.get("WORKING_DIRECTORY", "."))
+    dockerfile = environment["DOCKERFILE"]
+    context = environment["BUILD_CONTEXT"]
+    for name in (dockerfile, context, str(directory)):
+        if Path(name).is_absolute() or ".." in Path(name).parts:
+            raise ValueError("build paths must be repository relative")
+    capabilities = tomllib.loads((root / ".github/release.toml").read_text())
+    if "python" in capabilities:
+        consumer_type = "python"
+        allowed, package = python_metadata(root, directory, version, by_path)
+    else:
+        consumer_type = "node"
+        if capabilities["release"].get("tag_merged_commit") is not True:
+            raise ValueError("Node provenance requires tag-at-merge publication")
+        node_directory = Path(capabilities["node"]["directory"])
+        if node_directory.is_absolute() or ".." in node_directory.parts:
+            raise ValueError("Node directory must be repository relative")
+        manifest = str(node_directory / "package.json")
+        lock = str(node_directory / "package-lock.json")
+        manifest_data = json.loads((root / manifest).read_text())
+        lock_data = json.loads((root / lock).read_text())
+        if any(lock_data.get(key) != manifest_data[key] for key in ("name", "version")):
+            raise ValueError("Node manifest and lockfile identity differ")
+        # Node release tags do not rewrite application metadata. Every input,
+        # including package.json/package-lock.json, must remain the approved tree.
+        allowed = set()
+        package = {"package_name": manifest_data["name"],
+                   "package_version": manifest_data["version"],
+                   "manifest": by_path[manifest], "lockfile": by_path[lock]}
     tracked = set(
         command(
             "git", "-C", str(root), "ls-tree", "-r", "--name-only", "HEAD"
@@ -147,7 +175,7 @@ def prepare(root: Path, snapshot: Path, environment: dict[str, str]) -> dict:
     changed = set(
         command("git", "-C", str(root), "diff", "HEAD", "--name-only").splitlines()
     )
-    if changed - allowed or (set(by_path) - tracked) - {changelog}:
+    if changed - allowed or (set(by_path) - tracked) - allowed:
         raise ValueError("prepared inputs contain unapproved source changes")
     platforms = sorted(environment["PLATFORMS"].split(","))
     if not platforms or any(
@@ -171,11 +199,11 @@ def prepare(root: Path, snapshot: Path, environment: dict[str, str]) -> dict:
         "version": version,
         "platforms": platforms,
         "dockerfile": by_path[dockerfile],
-        "lockfile": by_path[lock],
+        "consumer_type": consumer_type,
         "build_context": context,
         "inputs_sha256": fingerprint(files),
         "files": files,
-        "package_name": project["name"],
+        **package,
     }
 
 
@@ -248,31 +276,44 @@ def verify(identity: dict, image_repository: str, digest: str, evidence: Path) -
             raise ValueError(
                 "candidate platform or OCI metadata disagrees with receipt"
             )
-        version = command(
-            "docker",
-            "run",
-            "--rm",
-            "--platform",
-            platform,
-            "--network",
-            "none",
-            "--read-only",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--entrypoint",
-            "python",
-            image,
-            "-c",
-            "import importlib.metadata,sys; print(importlib.metadata.version(sys.argv[1]))",
-            identity["package_name"],
-        )
-        if version != identity["version"][1:]:
-            raise ValueError("candidate package version disagrees with receipt")
+        if identity["consumer_type"] == "node":
+            healthcheck = config["Config"].get("Healthcheck", {}).get("Test", [])
+            if not healthcheck or healthcheck[0] == "NONE":
+                raise ValueError("Node candidate must retain its declared HEALTHCHECK")
+            # The pinned workflow health-checks this exact digest before signing
+            # the receipt. Static Node images need no Python/Node executable.
+        elif identity["consumer_type"] == "python":
+            verify_python_package(image, platform, identity)
+        else:
+            raise ValueError("unsupported candidate consumer type")
         (evidence / ("image-" + platform.replace("/", "-") + ".json")).write_text(
             canonical(config)
         )
+
+
+def verify_python_package(image: str, platform: str, identity: dict) -> None:
+    version = command(
+        "docker",
+        "run",
+        "--rm",
+        "--platform",
+        platform,
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--entrypoint",
+        "python",
+        image,
+        "-c",
+        "import importlib.metadata,sys; print(importlib.metadata.version(sys.argv[1]))",
+        identity["package_name"],
+    )
+    if version != identity["version"][1:]:
+        raise ValueError("candidate package version disagrees with receipt")
 
 
 def recover_identity(environment: dict, digest: str, evidence: Path) -> dict:

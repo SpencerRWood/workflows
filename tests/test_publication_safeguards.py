@@ -70,6 +70,10 @@ class ProvenanceTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "source"
         self.root.mkdir()
+        (self.root / ".github").mkdir()
+        (self.root / ".github/release.toml").write_text(
+            'version=1\n[python]\nversion="3.14"\n'
+        )
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.root)], check=True)
         for name, value in {
             "Dockerfile": "FROM scratch\n",
@@ -185,6 +189,7 @@ class ProvenanceTests(unittest.TestCase):
             "source_sha",
             "workflow_sha",
             "version",
+            "consumer_type",
             "platforms",
             "dockerfile",
             "lockfile",
