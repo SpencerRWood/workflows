@@ -118,9 +118,7 @@ jobs:
           else
             uv sync --frozen --group "${{ steps.config.outputs.dependency_group }}"
           fi
-          config_options=()
-          if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then config_options+=(--tag-merged-commit); fi
-          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
           tag="$("${semantic[@]}" --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
           [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           if git show-ref --verify --quiet "refs/tags/$tag" && [[ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$APPROVED_REVISION" ]]; then

@@ -261,9 +261,7 @@ jobs:
           EXPECTED_TAG: ${{ needs.authorization.outputs.release_tag || inputs.expected_tag }}
         run: |
           set -euo pipefail
-          config_options=()
-          if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then config_options+=(--tag-merged-commit); fi
-          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
           semantic=(uv run semantic-release)
           if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then semantic=("$SEMANTIC_RELEASE_EXECUTABLE"); fi
           tag="$("${semantic[@]}" --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
@@ -513,7 +511,7 @@ jobs:
           WORKFLOW_TOKEN: ${{ github.token }}
           EXPECTED_TAG: ${{ steps.version.outputs.release_tag }}
           RELEASE_REF: ${{ github.ref }}
-          RELEASE_INTEGRATION: ${{ inputs.release_integration }}
+          RELEASE_INTEGRATION: ${{ inputs.release_integration || steps.config.outputs.tag_merged_commit == 'true' }}
         run: |
           set -euo pipefail
           if [[ "$RELEASE_GIT_AUTH" == github-app ]]; then

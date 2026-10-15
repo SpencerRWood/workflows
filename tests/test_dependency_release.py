@@ -90,7 +90,7 @@ class DependencyReleaseTests(unittest.TestCase):
             subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "chore(deps): update image"], cwd=root, check=True, capture_output=True)
             subprocess.run(["git", "push", "origin", "main", "--tags"], cwd=root, check=True, capture_output=True)
             output = root / "release.json"
-            subprocess.run([sys.executable, str(ROOT / "scripts" / "semantic_release_config.py"), str(pyproject), str(output), "--tag-merged-commit"], check=True)
+            subprocess.run([sys.executable, str(ROOT / "scripts" / "semantic_release_config.py"), str(pyproject), str(output)], check=True)
             head_before = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
             result = subprocess.run(
                 [sys.executable, "-m", "semantic_release", "--config", str(output), "version", "--no-commit", "--no-changelog", "--no-push", "--no-vcs-release", "--skip-build"],

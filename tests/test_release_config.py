@@ -119,7 +119,7 @@ semantic_release = true
                 self.assertIn("[delivery] must be a TOML table", result.stderr)
                 self.assertEqual(outputs, "")
 
-    def test_tag_merged_commit_is_limited_to_non_packages(self) -> None:
+    def test_tag_merged_commit_supports_protected_main_package_releases(self) -> None:
         config = '''version = 1
 [python]
 [validation]
@@ -132,8 +132,7 @@ tag_merged_commit = true
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("tag_merged_commit=true", outputs)
         result, _ = self.run_config(config + "[build]\npython_package = true\n")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("requires build.python_package = false", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_integrated_container_without_dagster(self) -> None:
         result, outputs = self.run_config(
