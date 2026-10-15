@@ -1,0 +1,1 @@
+{"name":"node-only-release-fixture","version":"0.0.0","private":true,"scripts":{"build":"node --eval \"console.log('Node-only build verified')\""}}

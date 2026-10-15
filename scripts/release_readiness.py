@@ -89,9 +89,10 @@ def predict(root: Path, candidate: str, evidence: Path) -> str:
         subprocess.run(["git", "clone", "--quiet", "--shared", str(root), str(clone)], check=True)
         git("checkout", "-B", "main", candidate, cwd=clone)
         git("remote", "set-url", "origin", git("remote", "get-url", "origin"), cwd=clone)
+        config_args = ["--tag-merged-commit"] if capability["release"].get("tag_merged_commit") else []
         command(["python3", str(Path(__file__).with_name("semantic_release_config.py")),
-                 str(clone / directory / "pyproject.toml"), str(config)], evidence / "semantic-config.log")
-        executable = root / directory / ".venv/bin/semantic-release"
+                 str(clone / directory / "pyproject.toml"), str(config), *config_args], evidence / "semantic-config.log")
+        executable = Path(os.environ["SEMANTIC_RELEASE_EXECUTABLE"]) if "SEMANTIC_RELEASE_EXECUTABLE" in os.environ else root / directory / ".venv/bin/semantic-release"
         require(executable.is_file(), "locked semantic-release executable unavailable")
         env = {k: v for k, v in os.environ.items()
                if k not in {"GH_TOKEN", "GITHUB_TOKEN", "GITHUB_OUTPUT", "OPENPROJECT_API_TOKEN"}}

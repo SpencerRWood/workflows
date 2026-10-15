@@ -164,11 +164,13 @@ jobs:
         run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
 
       - name: Set up Python
+        if: steps.config.outputs.python_enabled == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: ${{ steps.config.outputs.python_version }}
 
       - name: Set up uv
+        if: steps.config.outputs.python_enabled == 'true'
         uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
@@ -177,8 +179,16 @@ jobs:
             ${{ steps.config.outputs.working_directory }}/uv.lock
 
       - name: Sync Python dependencies
+        if: steps.config.outputs.python_enabled == 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
+
+      - name: Install locked central release engine for Node-only consumers
+        if: steps.config.outputs.python_enabled != 'true'
+        run: |
+          python -m venv "$RUNNER_TEMP/semantic-release-tool"
+          "$RUNNER_TEMP/semantic-release-tool/bin/python" -m pip install --disable-pip-version-check --no-deps --require-hashes -r "$RUNNER_TEMP/workflow-contract/scripts/requirements-release.txt"
+          echo "SEMANTIC_RELEASE_EXECUTABLE=$RUNNER_TEMP/semantic-release-tool/bin/semantic-release" >> "$GITHUB_ENV"
 
       - name: Check release checkout is still the branch head
         id: current_head

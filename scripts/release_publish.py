@@ -42,7 +42,13 @@ def semantic(config: Path, *args: str, cwd: Path | None = None, readonly: bool =
     if readonly or cwd is not None:
         env = {k: v for k, v in env.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN", "OPENPROJECT_API_TOKEN"}}
     argv = ["uv", "run", "--frozen", "semantic-release"]
-    if cwd is not None:
+    standalone = os.environ.get("SEMANTIC_RELEASE_EXECUTABLE")
+    if standalone:
+        executable = Path(standalone)
+        if not executable.is_absolute() or not executable.is_file():
+            raise ValueError("Standalone semantic-release requires its installed absolute executable")
+        argv = [str(executable)]
+    elif cwd is not None:
         executable = Path.cwd() / ".venv/bin/semantic-release"
         if not executable.is_file():
             raise ValueError("isolated semantic inspection requires the locked source environment")

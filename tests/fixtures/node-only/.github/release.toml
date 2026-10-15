@@ -1,0 +1,10 @@
+version = 1
+[validation]
+checks = []
+[node]
+directory = "frontend"
+version = "24"
+checks = ["lint", "format", "typecheck", "test", "build"]
+[release]
+semantic_release = true
+tag_merged_commit = true

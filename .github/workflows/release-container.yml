@@ -220,11 +220,13 @@ jobs:
         run: test "${{ steps.config.outputs.container_publish }}" = true
 
       - name: Set up Python
+        if: steps.config.outputs.python_enabled == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: ${{ steps.config.outputs.python_version }}
 
       - name: Set up uv
+        if: steps.config.outputs.python_enabled == 'true'
         uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
@@ -233,8 +235,16 @@ jobs:
             ${{ steps.config.outputs.working_directory }}/uv.lock
 
       - name: Sync Python dependencies
+        if: steps.config.outputs.python_enabled == 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
+
+      - name: Install locked central release engine for Node-only consumers
+        if: steps.config.outputs.python_enabled != 'true'
+        run: |
+          python -m venv "$RUNNER_TEMP/semantic-release-tool"
+          "$RUNNER_TEMP/semantic-release-tool/bin/python" -m pip install --disable-pip-version-check --no-deps --require-hashes -r "$RUNNER_TEMP/workflow-contract/scripts/requirements-release.txt"
+          echo "SEMANTIC_RELEASE_EXECUTABLE=$RUNNER_TEMP/semantic-release-tool/bin/semantic-release" >> "$GITHUB_ENV"
 
       - name: Determine next version with semantic-release
         id: version
@@ -245,8 +255,12 @@ jobs:
           EXPECTED_TAG: ${{ needs.authorization.outputs.release_tag || inputs.expected_tag }}
         run: |
           set -euo pipefail
-          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
-          tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+          config_options=()
+          if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then config_options+=(--tag-merged-commit); fi
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          semantic=(uv run semantic-release)
+          if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then semantic=("$SEMANTIC_RELEASE_EXECUTABLE"); fi
+          tag="$("${semantic[@]}" --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
           if [[ -n "$EXPECTED_TAG" ]]; then test "$tag" = "$EXPECTED_TAG"; fi
           [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
             echo "semantic-release did not determine a stable release tag: $tag" >&2
@@ -269,7 +283,7 @@ jobs:
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Prepare semantic release metadata without a commit or tag
-        if: steps.version.outputs.release_tag != '' && steps.version.outputs.recover != 'true'
+        if: steps.config.outputs.python_enabled == 'true' && steps.version.outputs.release_tag != '' && steps.version.outputs.recover != 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -278,7 +292,7 @@ jobs:
           uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --no-commit --no-tag --no-push --no-vcs-release --skip-build
 
       - name: Lock prepared version before building the candidate
-        if: steps.version.outputs.release_tag != '' && steps.version.outputs.recover != 'true'
+        if: steps.config.outputs.python_enabled == 'true' && steps.version.outputs.release_tag != '' && steps.version.outputs.recover != 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: |
           set -euo pipefail
@@ -383,6 +397,12 @@ jobs:
           actual="sha256:$(docker buildx imagetools inspect "$CANDIDATE_IMAGE" --raw | sha256sum | cut -d ' ' -f1)"
           test "$actual" = "$EXPECTED_DIGEST"
           echo "digest=$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Node-only candidate health before publication
+        if: steps.version.outputs.release_tag != '' && steps.config.outputs.python_enabled != 'true'
+        env:
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.image_repository }}@${{ steps.digest.outputs.digest }}
+        run: python "$RUNNER_TEMP/workflow-contract/scripts/container_health.py"
 
       - name: Capture candidate build receipt
         if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != ''
@@ -494,7 +514,9 @@ jobs:
           fi
           export GITHUB_TOKEN="$GH_TOKEN"
           python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
-          actual_tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+          semantic=(uv run semantic-release)
+          if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then semantic=("$SEMANTIC_RELEASE_EXECUTABLE"); fi
+          actual_tag="$("${semantic[@]}" --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
           test "$actual_tag" = "$EXPECTED_TAG" || { echo "semantic-release version changed during validation: $EXPECTED_TAG -> $actual_tag" >&2; exit 1; }
           if [[ "$RELEASE_INTEGRATION" == true ]]; then
             # The supported exact-main path uses --no-commit --no-changelog --skip-build
