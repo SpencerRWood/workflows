@@ -183,14 +183,19 @@ class WorkflowIntegrationTests(unittest.TestCase):
         self.assertEqual(validation["jobs"]["contracts"]["permissions"], {"contents": "read"})
 
     def test_development_runs_tests_without_a_publisher_or_deployer(self):
-        document = self.workflow("validate.yml")
+        document = self.workflow("wood-validate.yml")
         triggers = document.get("on", document.get(True))
         self.assertEqual(triggers["push"]["branches"], ["development"])
         self.assertEqual(triggers["pull_request"]["branches"], ["development", "main"])
-        self.assertEqual(set(document["jobs"]), {"validation", "contracts"})
-        self.assertEqual(document["jobs"]["contracts"]["if"], "inputs.workflow_revision == ''")
-        self.assertEqual(document["jobs"]["validation"]["if"], "inputs.workflow_revision != ''")
-        self.assertIn("pytest", str(document["jobs"]))
+        self.assertEqual(set(document["jobs"]), {"validation"})
+        self.assertEqual(document["permissions"], {"contents": "read"})
+        job = document["jobs"]["validation"]
+        self.assertIn("/.github/workflows/validate.yml@", job["uses"])
+        self.assertEqual(job["uses"].split("@")[1], job["with"]["workflow_revision"])
+        self.assertNotIn("release", job["uses"])
+        reusable = self.workflow("validate.yml")
+        self.assertEqual(set(reusable.get("on", reusable.get(True))), {"workflow_call"})
+        self.assertIn("pytest", str(reusable["jobs"]))
 
     def test_automatic_guard_rejects_other_events_and_development(self):
         guard = self.workflow("authorize-operation.yml")["jobs"]["authorize"]["steps"][0]["run"]
