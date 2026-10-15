@@ -3,6 +3,38 @@ name: Authorize release operation
 on:
   workflow_call:
     inputs:
+      workflow_revision:
+        description: Shared helper revision pinned to this reusable workflow.
+        type: string
+        required: false
+        default: v1
+      release_integration:
+        description: Verify approved protected-main integration independently of caller booleans.
+        type: boolean
+        required: false
+        default: false
+      deployment_release:
+        description: Published immutable tag to authorize independently from current main.
+        type: string
+        default: ''
+      readiness_check:
+        description: Required Actions check that verifies accumulated release scope and validation.
+        type: string
+        required: false
+        default: release-readiness
+      evidence_key:
+        description: Unique artifact suffix for independently authorized matrix images.
+        type: string
+        required: false
+        default: authorization
+      hotfix_incident:
+        type: string
+        required: false
+        default: ''
+      hotfix_approval:
+        type: string
+        required: false
+        default: ''
       require_approval:
         description: Opt into explicit main-branch manual authorization.
         required: false
@@ -28,6 +60,16 @@ on:
         required: false
         type: string
         default: ''
+    outputs:
+      approved_revision:
+        description: Exact main revision verified against PR, CI and release approval.
+        value: ${{ jobs.authorize.outputs.approved_revision }}
+      release_tag:
+        value: ${{ jobs.authorize.outputs.release_tag }}
+    secrets:
+      release_read_token:
+        description: Read-only contents, pull-requests, checks and Actions token for private evidence; administration read when inspecting classic protection.
+        required: false
 
 permissions:
   contents: read
@@ -35,6 +77,9 @@ permissions:
 jobs:
   authorize:
     runs-on: ubuntu-latest
+    outputs:
+      approved_revision: ${{ steps.integration.outputs.approved_revision }}
+      release_tag: ${{ steps.integration.outputs.release_tag }}
     steps:
       - name: Reject unauthorized operation before acquiring runtime credentials
         env:
@@ -44,9 +89,15 @@ jobs:
           CALLER_REF: ${{ github.ref }}
           AUTOMATIC: ${{ inputs.automatic }}
           POLICY_COMMAND: ${{ inputs.automatic_policy_command }}
+          RELEASE_INTEGRATION: ${{ inputs.release_integration }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${RELEASE_INTEGRATION:-false}" == true ]]; then
+            [[ "$CALLER_REF" == refs/heads/main && "${AUTOMATIC:-false}" == false ]]
+            [[ "$CALLER_EVENT" == push || ( "$CALLER_EVENT" == workflow_dispatch && "$APPROVED" == true ) ]]
+            exit
+          fi
           if [[ "${AUTOMATIC:-false}" == true ]]; then
             [[ "$CALLER_EVENT" == push && "$CALLER_REF" == refs/heads/main && -n "${POLICY_COMMAND:-}" ]]
             exit
@@ -59,11 +110,45 @@ jobs:
             exit 1
           fi
       - name: Check out automatic policy at the exact consumer revision
-        if: inputs.automatic
+        if: inputs.automatic || inputs.release_integration
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+      - name: Check out pinned integration authorization helper
+        if: inputs.release_integration
+        env:
+          WORKFLOW_SHA: ${{ inputs.workflow_revision }}
+        run: |
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init "$RUNNER_TEMP/workflow-contract"
+          git -C "$RUNNER_TEMP/workflow-contract" remote add origin https://github.com/SpencerRWood/workflows.git
+          git -C "$RUNNER_TEMP/workflow-contract" fetch --depth 1 origin "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/workflow-contract" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/workflow-contract" rev-parse HEAD)" = "$WORKFLOW_SHA"
+      - name: Verify exact approved release integration
+        if: inputs.release_integration
+        id: integration
+        env:
+          GH_TOKEN: ${{ secrets.release_read_token || github.token }}
+          READINESS_CHECK: ${{ inputs.readiness_check }}
+          HOTFIX_INCIDENT: ${{ inputs.hotfix_incident }}
+          HOTFIX_APPROVAL: ${{ inputs.hotfix_approval }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+          DEPLOYMENT_RELEASE: ${{ inputs.deployment_release }}
+          RECOVERY_APPROVED: ${{ inputs.approved }}
+        run: |
+          gh auth setup-git
+          python3 "$RUNNER_TEMP/workflow-contract/scripts/release_authorization.py" --evidence "$RUNNER_TEMP/release-authorization.json"
+      - name: Retain integration authorization evidence
+        if: inputs.release_integration && steps.integration.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-authorization-${{ inputs.evidence_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-authorization.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Verify repository-owned automatic update authorization
         if: inputs.automatic
         env:

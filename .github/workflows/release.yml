@@ -3,6 +3,28 @@ name: Release
 on:
   workflow_call:
     inputs:
+      expected_tag:
+        description: Exact semantic tag required when finalizing coordinated images.
+        type: string
+        required: false
+        default: ''
+      release_integration:
+        description: Automatically publish only an independently verified approved main integration.
+        type: boolean
+        required: false
+        default: false
+      readiness_check:
+        type: string
+        required: false
+        default: release-readiness
+      hotfix_incident:
+        type: string
+        required: false
+        default: ''
+      hotfix_approval:
+        type: string
+        required: false
+        default: ''
       workflow_revision:
         description: Shared helper revision; pin to the same SHA as this workflow.
         type: string
@@ -41,6 +63,8 @@ on:
         description: Immutable tag verified at the release revision, including partial recovery.
         value: ${{ jobs.release.outputs.release_tag }}
     secrets:
+      release_read_token:
+        required: false
       dbt_host:
         description: dbt connection host, required only for the dbt-parse capability.
         required: false
@@ -72,13 +96,22 @@ jobs:
   authorization:
     uses: ./.github/workflows/authorize-operation.yml
     with:
+      workflow_revision: ${{ inputs.workflow_revision }}
+      release_integration: ${{ inputs.release_integration }}
+      readiness_check: ${{ inputs.readiness_check }}
+      hotfix_incident: ${{ inputs.hotfix_incident }}
+      hotfix_approval: ${{ inputs.hotfix_approval }}
       require_approval: ${{ inputs.require_approval }}
       approved: ${{ inputs.approved }}
       automatic: ${{ inputs.automatic }}
       automatic_policy_command: ${{ inputs.automatic_policy_command }}
+    secrets:
+      release_read_token: ${{ secrets.release_read_token }}
 
   validation:
     needs: authorization
+    permissions:
+      contents: read
     uses: ./.github/workflows/validate.yml
     with:
       workflow_revision: ${{ inputs.workflow_revision }}
@@ -93,7 +126,10 @@ jobs:
   release:
     name: Release after validation
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: validation
+    needs: [authorization, validation]
+    env:
+      APPROVAL_REQUIRED: ${{ inputs.release_integration }}
+      APPROVED_REVISION: ${{ needs.authorization.outputs.approved_revision }}
     runs-on: ubuntu-latest
     outputs:
       released: ${{ steps.semantic_release.outputs.released || 'false' }}
@@ -128,11 +164,13 @@ jobs:
         run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
 
       - name: Set up Python
+        if: steps.config.outputs.python_enabled == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: ${{ steps.config.outputs.python_version }}
 
       - name: Set up uv
+        if: steps.config.outputs.python_enabled == 'true'
         uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
@@ -141,8 +179,16 @@ jobs:
             ${{ steps.config.outputs.working_directory }}/uv.lock
 
       - name: Sync Python dependencies
+        if: steps.config.outputs.python_enabled == 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
+
+      - name: Install locked central release engine for Node-only consumers
+        if: steps.config.outputs.python_enabled != 'true'
+        run: |
+          python -m venv "$RUNNER_TEMP/semantic-release-tool"
+          "$RUNNER_TEMP/semantic-release-tool/bin/python" -m pip install --disable-pip-version-check --no-deps --require-hashes -r "$RUNNER_TEMP/workflow-contract/scripts/requirements-release.txt"
+          echo "SEMANTIC_RELEASE_EXECUTABLE=$RUNNER_TEMP/semantic-release-tool/bin/semantic-release" >> "$GITHUB_ENV"
 
       - name: Check release checkout is still the branch head
         id: current_head
@@ -158,10 +204,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_REF: ${{ github.ref }}
           RECOVERY_TAG: ${{ inputs.recovery_tag }}
+          EXPECTED_TAG: ${{ needs.authorization.outputs.release_tag || inputs.expected_tag }}
+          RELEASE_INTEGRATION: ${{ inputs.release_integration }}
         run: |
           config_options=()
           if [[ "${{ steps.config.outputs.tag_merged_commit }}" == 'true' ]]; then
             config_options+=(--tag-merged-commit)
           fi
           python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          if [[ "${{ inputs.release_integration }}" == true && ${#config_options[@]} == 0 ]]; then
+            config_options+=(--tag-merged-commit)
+          fi
           python "$RUNNER_TEMP/workflow-contract/scripts/release_publish.py" "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"

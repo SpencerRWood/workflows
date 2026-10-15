@@ -7,9 +7,12 @@ remain superseded. Only Python semantic-release mutates version files/tags/relea
 from __future__ import annotations
 
 import argparse
+import glob
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,12 +35,28 @@ def git(*args: str, cwd: Path | None = None) -> str:
     return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
 
 
-def semantic(config: Path, *args: str, cwd: Path | None = None) -> str:
+def semantic(config: Path, *args: str, cwd: Path | None = None, readonly: bool = False) -> str:
     # PSR emits optimistic Actions outputs before creating the GitHub release.
     # Only this helper's final verified result may reach the caller outputs.
     env = {k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"}
+    if readonly or cwd is not None:
+        env = {k: v for k, v in env.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN", "OPENPROJECT_API_TOKEN"}}
+    argv = ["uv", "run", "--frozen", "semantic-release"]
+    standalone = os.environ.get("SEMANTIC_RELEASE_EXECUTABLE")
+    if standalone:
+        executable = Path(standalone)
+        if not executable.is_absolute() or not executable.is_file():
+            raise ValueError("Standalone semantic-release requires its installed absolute executable")
+        argv = [str(executable)]
+    elif cwd is not None:
+        executable = Path.cwd() / ".venv/bin/semantic-release"
+        if not executable.is_file():
+            raise ValueError("isolated semantic inspection requires the locked source environment")
+        argv = [str(executable)]
+        env["VIRTUAL_ENV"] = str(Path.cwd() / ".venv")
+        env["PATH"] = str(Path.cwd() / ".venv/bin") + os.pathsep + env.get("PATH", "")
     result = subprocess.run(
-        ["uv", "run", "--frozen", "semantic-release", "--config", str(config), *args],
+        [*argv, "--config", str(config), *args],
         cwd=cwd,
         env=env,
         text=True,
@@ -105,7 +124,10 @@ def release(tag: str) -> dict | None:
 
 
 def require_current(ref: str) -> str:
-    if not is_current(ref):
+    approved = os.environ.get("APPROVED_REVISION") or None
+    if os.environ.get("APPROVAL_REQUIRED") == "true" and approved is None:
+        raise ValueError("approved_revision required")
+    if not is_current(ref, approved):
         raise ValueError(
             "Validated checkout was superseded; dispatch a fresh validated run"
         )
@@ -196,6 +218,66 @@ def verify_published(tag: str, revision: str, ref: str) -> None:
         raise ValueError("GitHub release is missing after publication")
 
 
+def reconcile_assets(config_path: Path, tag: str, revision: str, ref: str) -> None:
+    """Recover explicitly configured assets without replacing existing bytes."""
+    config = json.loads(config_path.read_text())["semantic_release"]
+    declared = config.get("assets", [])
+    if not declared or os.environ.get("RELEASE_INTEGRATION") != "true":
+        return
+    root = Path(git("rev-parse", "--show-toplevel"))
+    directory = Path.cwd().relative_to(root)
+    paths = [Path(name) for name in declared]
+    if len(paths) > 64 or any(p.is_absolute() or ".." in p.parts or p.is_symlink()
+                            or not p.resolve().is_relative_to(Path.cwd()) for p in paths):
+        raise ValueError("release assets must be bounded repository-relative regular files")
+    if len({p.name for p in paths}) != len(paths):
+        raise ValueError("duplicate release asset names")
+    if any(not p.is_file() for p in paths):
+        if not config.get("build_command"):
+            raise ValueError("configured asset missing with no build command")
+        # Remove this tag only in an isolated local view. PSR rebuilds the
+        # original version without pushing or changing a remote tag.
+        with tempfile.TemporaryDirectory(prefix="release-assets-") as temporary:
+            clone = Path(temporary) / "repository"
+            subprocess.run(["git", "clone", "--quiet", "--shared", str(root), str(clone)], check=True)
+            git("checkout", "-B", "main", revision, cwd=clone)
+            git("remote", "set-url", "origin", git("remote", "get-url", "origin"), cwd=clone)
+            git("tag", "-d", tag, cwd=clone)
+            if semantic(config_path, "version", "--print-tag", cwd=clone / directory) != tag:
+                raise ValueError("asset recovery would create another version")
+            semantic(config_path, "version", "--no-commit", "--no-changelog", "--no-tag",
+                     "--no-push", "--no-vcs-release", cwd=clone / directory, readonly=True)
+            if git("rev-parse", "HEAD", cwd=clone) != revision:
+                raise ValueError("asset build changed approved source")
+            for path in paths:
+                source = clone / directory / path
+                if not source.is_file() or source.is_symlink() or not source.resolve().is_relative_to(clone.resolve()):
+                    raise ValueError("asset build did not produce a regular file")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, path)
+    desired = {p.name: "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    published = release(tag)
+    if published is None:
+        raise ValueError("release missing before asset reconciliation")
+    observed = {a["name"]: a.get("digest") for a in published.get("assets", [])}
+    if any(name in observed and observed[name] != digest for name, digest in desired.items()):
+        raise ValueError("conflicting or unverifiable asset; never replace it")
+    missing = [str(p) for p in paths if p.name not in observed]
+    if missing:
+        require_current(ref)
+        if remote_tag(tag) != revision:
+            raise ValueError("asset release tag changed")
+        with tempfile.TemporaryDirectory(prefix="release-asset-upload-") as temporary:
+            upload = Path(temporary) / "config.json"
+            config["publish"] = {**config.get("publish", {}), "dist_glob_patterns": [glob.escape(p) for p in missing]}
+            upload.write_text(json.dumps({"semantic_release": config}))
+            semantic(upload, "publish", "--tag", tag)
+    published = release(tag)
+    observed = {a["name"]: a.get("digest") for a in (published or {}).get("assets", [])}
+    if any(observed.get(name) != digest for name, digest in desired.items()):
+        raise ValueError("configured release assets were not verified")
+
+
 def post_missing_release(config: Path, tag: str, revision: str, ref: str) -> None:
     for attempt in range(3):
         require_current(ref)
@@ -231,6 +313,8 @@ def publish(
         if not tag_merged_commit
         else None
     )
+    if os.environ.get("RELEASE_INTEGRATION") == "true" and expected and expected != os.environ.get("EXPECTED_TAG"):
+        raise ValueError("Recovery tag differs from the approved release plan")
     head_tag = (
         config.get("tag_format", "v{version}").format(version=version)
         if version
@@ -269,6 +353,8 @@ def publish(
             require_current(ref)
             if remote_tag(expected) != target or release(expected) is None:
                 raise ValueError("Recovery publication changed during verification")
+            if target == validated:
+                reconcile_assets(config_path, expected, validated, ref)
             return True, expected
     if version:
         parent = git("rev-parse", "HEAD^")
@@ -310,11 +396,14 @@ def publish(
         elif existing is None:
             post_missing_release(config_path, tag, validated, ref)
         verify_published(tag, validated, ref)
+        reconcile_assets(config_path, tag, validated, ref)
         # Idempotent reconciliation returns the verified tag even on a repeated
         # dispatch, allowing downstream delivery to resume without another version.
         return True, tag
 
     tag = semantic(config_path, "version", "--print-tag")
+    if os.environ.get("EXPECTED_TAG") and os.environ["EXPECTED_TAG"] != tag:
+        raise ValueError("Semantic tag differs from coordinated image release identity")
     if expected:
         # Dynamic/tag-at-merge releases can recover a missing GitHub release only
         # at the exact validated tag target. No version commit is inferred.
@@ -324,6 +413,7 @@ def publish(
             )
         post_missing_release(config_path, tag, validated, ref)
         verify_published(tag, validated, ref)
+        reconcile_assets(config_path, tag, validated, ref)
         return True, tag
     target = remote_tag(tag)
     if target is not None:
@@ -336,6 +426,7 @@ def publish(
         if target == validated:
             post_missing_release(config_path, tag, validated, ref)
             verify_published(tag, validated, ref)
+            reconcile_assets(config_path, tag, validated, ref)
             return True, tag
         return False, ""
     if release(tag) is not None:
@@ -356,6 +447,8 @@ def publish(
     options = (
         ["--no-commit", "--no-changelog", "--skip-build"] if tag_merged_commit else []
     )
+    if tag_merged_commit and os.environ.get("RELEASE_INTEGRATION") == "true" and config.get("build_command"):
+        options.remove("--skip-build")
     semantic(config_path, "version", "--vcs-release", *options)
     revision = git("rev-parse", "HEAD")
     if tag_merged_commit:
@@ -376,6 +469,7 @@ def publish(
                 "Generated release is not a direct child of the validated revision"
             )
     verify_published(tag, revision, ref)
+    reconcile_assets(config_path, tag, revision, ref)
     return True, tag
 
 

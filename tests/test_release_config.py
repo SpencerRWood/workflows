@@ -18,7 +18,7 @@ VALIDATION_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "val
 class ReleaseConfigTests(unittest.TestCase):
     """Exercise supported and invalid configuration combinations."""
 
-    def run_config(self, config: str, files: tuple[str, ...] = ()) -> tuple[subprocess.CompletedProcess[str], str]:
+    def run_config(self, config: str, files: tuple[str, ...] = (), *, validation_only: bool = False) -> tuple[subprocess.CompletedProcess[str], str]:
         """Run the loader against a small representative consumer checkout."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -34,7 +34,7 @@ class ReleaseConfigTests(unittest.TestCase):
             output_path = root / "outputs"
             environment = {**os.environ, "GITHUB_OUTPUT": str(output_path)}
             result = subprocess.run(
-                [sys.executable, str(SCRIPT), str(config_path)],
+                [sys.executable, str(SCRIPT), str(config_path)] + (["--validation-only"] if validation_only else []),
                 check=False,
                 capture_output=True,
                 text=True,
@@ -42,6 +42,15 @@ class ReleaseConfigTests(unittest.TestCase):
             )
             outputs = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
             return result, outputs
+
+    def test_validation_only_repository_cannot_enter_publication_contract(self):
+        config = 'version = 1\n[python]\n[validation]\nchecks = ["pytest"]\n[release]\nsemantic_release = false\n'
+        result, outputs = self.run_config(config, validation_only=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("check_pytest=true", outputs)
+        result, _ = self.run_config(config)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("semantic_release must be true", result.stderr)
 
     def test_python_package_configuration(self) -> None:
         result, outputs = self.run_config(
@@ -283,7 +292,7 @@ semantic_release = true
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("uses: ./.github/workflows/validate.yml", workflow)
         self.assertIn("workflow_revision: ${{ inputs.workflow_revision }}", workflow)
-        self.assertIn("needs: validation", workflow)
+        self.assertIn("needs: [authorization, validation]", workflow)
 
     def test_compose_capability_is_exposed(self) -> None:
         result, outputs = self.run_config(

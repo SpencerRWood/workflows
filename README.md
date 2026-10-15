@@ -6,8 +6,11 @@ implementation concerns, not workflow APIs. Consumers declare their required
 capabilities in `.github/release.toml` and should never reference implementation
 files in this repository.
 
-Consumers pin each public contract to its stable major version. Development
-happens on `main`; breaking contracts receive a new major tag. Consumers
+Consumers pin each public contract to its stable major version. The target
+lifecycle is working branch → development → protected main → automatic pinned
+release workflow. This repository adopts `development` for Story base/target through
+the [approved BR-02 setup](docs/br02-adoption-plan.md);
+breaking contracts receive a new major tag. Consumers
 must not use `@main` as their long-term contract.
 
 | Capability | Public reusable workflow |
@@ -22,6 +25,11 @@ while they migrate to the integrated container release. Its filename is the
 reverse of the current public container release workflow.
 The [main branch policy](docs/branch-rules.md) records the protected consumer
 release model.
+
+The additive [BR-02 approved-release contract](docs/br02-release-contract.md)
+verifies exact protected-main integration before automatic publication and configured
+deployment, supports coordinated image recovery, and preserves existing caller defaults.
+Its examples are fixtures for future reviewed adoption; no consumer is migrated here.
 
 `deploy-ansible.yml` is the complementary reusable deployment contract. A
 consumer calls it only after a GitHub Release is published, passes an immutable

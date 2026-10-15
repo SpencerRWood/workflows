@@ -1,4 +1,32 @@
+[dependency-groups]
+dev = ["pytest==8.4.2", "PyYAML==6.0.3", "python-semantic-release==10.6.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv.workspace]
+members = []
+
+[tool.wood.verify]
+version = 1
+retry_safe = true
+
+[[tool.wood.verify.checks]]
+name = "workflow-yaml"
+argv = ["actionlint", "-color"]
+timeout_seconds = 60
+
 [tool.wood.architecture]
 domain = "engineering"
 capability = "release-control"
 kind = "workflow"
+
+[tool.wood.openproject]
+project_id = 3
+initiative_id = 552
+
+[tool.wood.branching]
+strategy = "integration"
+release_id = 26
+integration_branch = "development"
+scope_reference = "OP-555 activity 1414: explicit workflows development setup approval, 2026-10-14"

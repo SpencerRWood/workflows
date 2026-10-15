@@ -275,14 +275,51 @@ def verify(identity: dict, image_repository: str, digest: str, evidence: Path) -
         )
 
 
+def recover_identity(environment: dict, digest: str, evidence: Path) -> dict:
+    """Recover only the identity signed by this exact pinned build contract."""
+    expected = {"repository": environment["GITHUB_REPOSITORY"],
+                "source_sha": environment["SOURCE_REVISION"],
+                "workflow_sha": environment["WORKFLOW_REVISION"],
+                "version": environment["RELEASE_TAG"],
+                "dockerfile": environment["DOCKERFILE"],
+                "build_context": environment["BUILD_CONTEXT"],
+                "platforms": environment["PLATFORMS"].split(",")}
+    if not SHA.fullmatch(expected["source_sha"]) or not SHA.fullmatch(expected["workflow_sha"]):
+        raise ValueError("recovery requires immutable source and workflow revisions")
+    if not DIGEST.fullmatch(digest):
+        raise ValueError("recovery requires a prior candidate digest")
+    image_repository = environment["IMAGE_REPOSITORY"]
+    results = json.loads(command(
+        "gh", "attestation", "verify", "oci://" + image_repository + "@" + digest,
+        "--repo", expected["repository"], "--signer-workflow", SIGNER,
+        "--signer-digest", expected["workflow_sha"], "--source-digest", expected["source_sha"],
+        "--source-ref", "refs/heads/main", "--deny-self-hosted-runners",
+        "--predicate-type", PREDICATE, "--format", "json"))
+    identities = []
+    for result in results:
+        identity = result["verificationResult"]["statement"].get("predicate", {}).get("identity", {})
+        if all(identity.get(key) == value for key, value in expected.items()):
+            verified_receipt([result], identity, image_repository, digest)
+            if fingerprint(identity["files"]) != identity["inputs_sha256"]:
+                raise ValueError("recovered input fingerprint disagrees with signed files")
+            if identity not in identities:
+                identities.append(identity)
+    if len(identities) != 1:
+        raise ValueError("missing or ambiguous signed recovery identity")
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "identity.json").write_text(canonical(identities[0]))
+    return identities[0]
+
+
 def verify_finalized(root: Path, identity: dict) -> None:
     revision = command("git", "-C", str(root), "rev-parse", "HEAD")
     parents = command(
         "git", "-C", str(root), "show", "-s", "--format=%P", "HEAD"
     ).split()
     if (
-        parents != [identity["source_sha"]]
-        or fingerprint(inputs(root)) != identity["inputs_sha256"]
+        revision != identity["source_sha"]
+        and (parents != [identity["source_sha"]]
+             or fingerprint(inputs(root)) != identity["inputs_sha256"])
     ):
         raise ValueError(
             "final metadata commit is not the direct child with the attested prepared inputs"
@@ -310,7 +347,7 @@ def verify_finalized(root: Path, identity: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "phase", choices=["prepare", "receipt", "verify", "finalized", "capture"]
+        "phase", choices=["prepare", "receipt", "verify", "finalized", "capture", "recover"]
     )
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path)
@@ -322,6 +359,8 @@ def main() -> int:
             (args.evidence / "build-metadata.json").write_text(
                 canonical(json.loads(os.environ["BUILD_METADATA"]))
             )
+        elif args.phase == "recover":
+            recover_identity(dict(os.environ), os.environ["IMAGE_DIGEST"], args.evidence)
         elif args.phase == "prepare":
             if args.snapshot is None:
                 raise ValueError("explicit fresh snapshot path required")

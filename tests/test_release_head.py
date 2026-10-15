@@ -79,7 +79,7 @@ class ReleaseHeadTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("group: release-${{ github.repository }}-${{ github.ref }}", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
-        self.assertIn("needs: validation", workflow)
+        self.assertIn("needs: [authorization, validation]", workflow)
         self.assertLess(workflow.index("scripts/release_head.py"), workflow.index("Run semantic-release"))
         self.assertIn("if: steps.current_head.outputs.current == 'true'", workflow)
 

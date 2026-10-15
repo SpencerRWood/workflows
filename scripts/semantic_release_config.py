@@ -23,7 +23,7 @@ def main() -> None:
     config["branches"] = {"main": {"match": "^main$", "prerelease": False}}
     if args.tag_merged_commit:
         project = pyproject.get("project", {})
-        if "version" in project or "version" not in project.get("dynamic", []):
+        if project and ("version" in project or "version" not in project.get("dynamic", [])):
             parser.error("tag-merged-commit requires a dynamic project version")
         if config.get("version_toml") or config.get("version_variables"):
             parser.error("tag-merged-commit cannot update version files")

@@ -3,6 +3,28 @@ name: Deploy Ansible release
 on:
   workflow_call:
     inputs:
+      workflow_revision:
+        description: Shared helper revision pinned to this reusable workflow.
+        type: string
+        required: false
+        default: v1
+      release_integration:
+        description: Deploy under standing configuration after independently verified main release approval.
+        type: boolean
+        required: false
+        default: false
+      readiness_check:
+        type: string
+        required: false
+        default: release-readiness
+      hotfix_incident:
+        type: string
+        required: false
+        default: ''
+      hotfix_approval:
+        type: string
+        required: false
+        default: ''
       require_approval:
         description: Require separately authorized manual deployment on main.
         type: boolean
@@ -125,6 +147,10 @@ on:
         type: string
         default: ''
 
+    secrets:
+      release_read_token:
+        required: false
+
 permissions:
   contents: read
   deployments: write
@@ -137,11 +163,19 @@ jobs:
   authorization:
     uses: ./.github/workflows/authorize-operation.yml
     with:
+      workflow_revision: ${{ inputs.workflow_revision }}
+      release_integration: ${{ inputs.release_integration }}
+      readiness_check: ${{ inputs.readiness_check }}
+      hotfix_incident: ${{ inputs.hotfix_incident }}
+      hotfix_approval: ${{ inputs.hotfix_approval }}
       require_approval: ${{ inputs.require_approval }}
       approved: ${{ inputs.approved }}
       automatic: ${{ inputs.automatic }}
       automatic_policy_command: ${{ inputs.automatic_policy_command }}
       revision: ${{ inputs.ref }}
+      deployment_release: ${{ inputs.release_integration && inputs.ref || '' }}
+    secrets:
+      release_read_token: ${{ secrets.release_read_token }}
 
   deploy:
     needs: authorization
@@ -161,12 +195,16 @@ jobs:
           fetch-depth: 0
 
       - name: Verify release checkout
+        id: release_checkout
         env:
           DEPLOY_REF: ${{ inputs.ref }}
           ALLOW_MAIN_COMMIT: ${{ inputs.allow_main_commit }}
           CALLER_EVENT: ${{ github.event_name }}
           CALLER_REF: ${{ github.ref }}
           EVENT_SHA: ${{ github.sha }}
+          RELEASE_INTEGRATION: ${{ inputs.release_integration }}
+          APPROVED_REVISION: ${{ needs.authorization.outputs.approved_revision }}
+          DEPLOY_REPOSITORY: ${{ inputs.repository }}
         run: |
           set -euo pipefail
           if [[ "$ALLOW_MAIN_COMMIT" == true && "$DEPLOY_REF" =~ ^[a-f0-9]{40}$ ]]; then
@@ -177,7 +215,12 @@ jobs:
           else
             test "$(git describe --exact-match --tags HEAD)" = "$DEPLOY_REF"
           fi
+          if [[ "${RELEASE_INTEGRATION:-false}" == true ]]; then
+            test "$DEPLOY_REPOSITORY" = "$GITHUB_REPOSITORY"
+            test "$(git rev-parse HEAD)" = "$APPROVED_REVISION"
+          fi
           echo "repository=${{ inputs.repository }} release=${{ inputs.ref }} environment=${{ inputs.environment_name }} start=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v9.0.0
@@ -226,6 +269,9 @@ jobs:
 
       - name: Validate release and target
         env:
+          RELEASE_INTEGRATION: ${{ inputs.release_integration }}
+          PRIVILEGED_ROLLBACK_COMMAND: ${{ inputs.privileged_rollback_command }}
+          PREVIOUS_REF: ${{ steps.previous.outputs.ref }}
           SECRETS_FILE: ${{ inputs.secrets_file }}
           INVENTORY_PATH: ${{ inputs.inventory_path }}
           PLAYBOOK_PATH: ${{ inputs.playbook_path }}
@@ -235,6 +281,10 @@ jobs:
           PRIVILEGED_CHECK_COMMAND: ${{ inputs.privileged_check_command }}
         run: |
           set -euo pipefail
+          if [[ "${RELEASE_INTEGRATION:-false}" == true ]]; then
+            test -n "$PRIVILEGED_ROLLBACK_COMMAND"
+            test -n "$PREVIOUS_REF"
+          fi
           if [[ -n "$SECRETS_FILE" ]]; then
             test -r "$SECRETS_FILE"
             set -a
@@ -345,7 +395,7 @@ jobs:
           PRIVILEGED_DEPLOY_COMMAND: ${{ inputs.privileged_deploy_command }}
           PRIVILEGED_HEALTH_CHECK_COMMAND: ${{ inputs.privileged_health_check_command }}
           PRIVILEGED_ROLLBACK_COMMAND: ${{ inputs.privileged_rollback_command }}
-          AUTOMATIC: ${{ inputs.automatic }}
+          AUTOMATIC: ${{ inputs.automatic || inputs.release_integration }}
         run: |
           set -euo pipefail
           if [[ -n "$PRIVILEGED_ROLLBACK_COMMAND" ]]; then
@@ -384,6 +434,8 @@ jobs:
           HEALTH: ${{ steps.health.outcome }}
           ROLLBACK: ${{ steps.rollback.outcome }}
           PREVIOUS: ${{ steps.previous.outputs.ref }}
+          SOURCE_REVISION: ${{ steps.release_checkout.outputs.revision }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
         run: |
           python3 - <<'PY'
           import json, os, subprocess
@@ -396,7 +448,8 @@ jobs:
               state = {}
           success = os.environ['APPLY'] == 'success' and os.environ['HEALTH'] == 'success'
           if success:
-              state['previous_successful_release'] = state.get('current_release')
+              if state.get('current_release') != os.environ['RELEASE']:
+                  state['previous_successful_release'] = state.get('current_release')
               state['current_release'] = os.environ['RELEASE']
               state['commit_sha'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           state.update({
@@ -406,6 +459,10 @@ jobs:
               'last_attempt_state': 'success' if success else 'failure',
               'rollback_release': os.environ['PREVIOUS'] or None,
               'rollback_state': os.environ['ROLLBACK'] or 'not-needed',
+              'last_attempt_commit_sha': os.environ['SOURCE_REVISION'],
+              'workflow_revision': os.environ['WORKFLOW_REVISION'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
           })
           temporary = path + '.tmp'
           with open(temporary, 'w') as stream:
