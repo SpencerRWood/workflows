@@ -86,10 +86,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-      - uses: astral-sh/setup-uv@v9.0.0
       - name: Load existing release inputs
         id: config
         run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml
+      - uses: astral-sh/setup-uv@v9.0.0
+        if: steps.config.outputs.python_enabled == 'true'
+      - name: Install locked central release engine for Node-only consumers
+        if: steps.config.outputs.python_enabled != 'true'
+        run: |
+          python -m venv "$RUNNER_TEMP/semantic-release-tool"
+          "$RUNNER_TEMP/semantic-release-tool/bin/python" -m pip install --disable-pip-version-check --no-deps --require-hashes -r "$RUNNER_TEMP/workflow-contract/scripts/requirements-release.txt"
+          echo "SEMANTIC_RELEASE_EXECUTABLE=$RUNNER_TEMP/semantic-release-tool/bin/semantic-release" >> "$GITHUB_ENV"
       - name: Resolve one semantic release identity without publishing
         id: plan
         working-directory: ${{ steps.config.outputs.working_directory }}
@@ -100,9 +107,16 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$APPROVED_REVISION"
-          uv sync --frozen --group "${{ steps.config.outputs.dependency_group }}"
-          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
-          tag="$(uv run semantic-release --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
+          semantic=(uv run semantic-release)
+          if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then
+            semantic=("$SEMANTIC_RELEASE_EXECUTABLE")
+          else
+            uv sync --frozen --group "${{ steps.config.outputs.dependency_group }}"
+          fi
+          config_options=()
+          if [[ -n "${SEMANTIC_RELEASE_EXECUTABLE:-}" ]]; then config_options+=(--tag-merged-commit); fi
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          tag="$("${semantic[@]}" --config "$RUNNER_TEMP/semantic-release-config.json" version --print-tag)"
           [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           if git show-ref --verify --quiet "refs/tags/$tag" && [[ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$APPROVED_REVISION" ]]; then
             git merge-base --is-ancestor "refs/tags/$tag^{commit}" "$APPROVED_REVISION"

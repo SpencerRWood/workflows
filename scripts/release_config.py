@@ -25,7 +25,7 @@ VALID_CHECKS = frozenset(
         "dbt-parse",
     }
 )
-VALID_NODE_CHECKS = frozenset({"lint", "typecheck", "test", "build"})
+VALID_NODE_CHECKS = frozenset({"lint", "format", "typecheck", "test", "build"})
 TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "runtime", "container", "release", "delivery"})
 TABLE_FIELDS = {
     "project": frozenset({"working_directory"}),
@@ -146,7 +146,8 @@ def main() -> None:
     if config.get("version") != 1:
         fail("version must be the supported schema version: 1.")
     project = mapping(config.get("project", {}), "project")
-    python = mapping(config.get("python"), "python")
+    python_enabled = "python" in config
+    python = mapping(config.get("python", {}), "python")
     validation = mapping(config.get("validation"), "validation")
     release = mapping(config.get("release"), "release")
     delivery = mapping(config.get("delivery", {}), "delivery")
@@ -180,7 +181,10 @@ def main() -> None:
         string(python.get("dependency_group"), "python.dependency_group", "dev"),
         "python.dependency_group",
     )
-    checks = strings(validation.get("checks"), "validation.checks", VALID_CHECKS)
+    checks = (strings(validation.get("checks"), "validation.checks", VALID_CHECKS)
+              if python_enabled else set())
+    if not python_enabled and validation.get("checks") != []:
+        fail("Node-only consumers require validation.checks = [] and node.checks.")
     if "pytest-coverage" in checks and "pytest" not in checks:
         fail("validation.checks must include pytest when it includes pytest-coverage.")
     if not boolean(release.get("semantic_release"), "release.semantic_release") and not args.validation_only:
@@ -188,12 +192,14 @@ def main() -> None:
 
     root = args.config.parent.parent
     python_root = root / working_directory
-    if not (python_root / "pyproject.toml").is_file() or not (python_root / "uv.lock").is_file():
+    if python_enabled and (not (python_root / "pyproject.toml").is_file() or not (python_root / "uv.lock").is_file()):
         fail(f"project.working_directory '{working_directory}' must contain pyproject.toml and uv.lock.")
 
     build = mapping(config.get("build", {}), "build")
     python_package = boolean(build.get("python_package"), "build.python_package")
     tag_merged_commit = boolean(release.get("tag_merged_commit"), "release.tag_merged_commit")
+    if not python_enabled and (python_package or not tag_merged_commit):
+        fail("Node-only releases require tag_merged_commit = true and no Python package.")
     if tag_merged_commit and python_package:
         fail("release.tag_merged_commit requires build.python_package = false.")
     dagster = mapping(config.get("dagster", {}), "dagster")
@@ -251,6 +257,10 @@ def main() -> None:
         node_checks = strings(node.get("checks"), "node.checks", VALID_NODE_CHECKS)
         if not (root / node_directory / "package-lock.json").is_file():
             fail(f"node.directory '{node_directory}' must contain package-lock.json.")
+    if not python_enabled and not node_enabled:
+        fail("Declare a Python or Node validation capability.")
+    if not python_enabled and (dagster_runtime_validation or runtime_validation):
+        fail("Python runtime checks require a Python capability.")
 
     dbt = mapping(config.get("dbt", {}), "dbt")
     profiles_example = relative_directory(
@@ -265,6 +275,7 @@ def main() -> None:
 
     emit("working_directory", working_directory)
     emit("python_version", python_version)
+    emit("python_enabled", python_enabled)
     emit("dependency_group", dependency_group)
     emit("build_python_package", python_package)
     emit("tag_merged_commit", tag_merged_commit)

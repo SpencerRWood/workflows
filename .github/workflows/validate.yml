@@ -58,6 +58,9 @@ jobs:
       - uses: astral-sh/setup-uv@v9.0.0
       - name: Install locked contract-test dependencies
         run: uv sync --frozen --group dev
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
       - name: Test workflow contracts
         run: uv run --frozen pytest -p no:cacheprovider
       - name: Validate workflow YAML
@@ -105,11 +108,13 @@ jobs:
         run: python "$RUNNER_TEMP/workflow-contract/scripts/release_config.py" .github/release.toml --validation-only
 
       - name: Set up Python
+        if: steps.config.outputs.python_enabled == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: ${{ steps.config.outputs.python_version }}
 
       - name: Set up uv
+        if: steps.config.outputs.python_enabled == 'true'
         uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
@@ -126,6 +131,7 @@ jobs:
           cache-dependency-path: ${{ steps.config.outputs.node_directory }}/package-lock.json
 
       - name: Sync Python dependencies
+        if: steps.config.outputs.python_enabled == 'true'
         working-directory: ${{ steps.config.outputs.working_directory }}
         run: uv sync --frozen --group ${{ steps.config.outputs.dependency_group }}
 
@@ -199,6 +205,11 @@ jobs:
         if: ${{ steps.config.outputs.node_check_lint == 'true' }}
         working-directory: ${{ steps.config.outputs.node_directory }}
         run: npm run lint
+
+      - name: Run Node formatting check
+        if: ${{ steps.config.outputs.node_check_format == 'true' }}
+        working-directory: ${{ steps.config.outputs.node_directory }}
+        run: npm run format
 
       - name: Run Node typecheck
         if: ${{ steps.config.outputs.node_check_typecheck == 'true' }}
