@@ -535,7 +535,7 @@ class WorkflowTests(unittest.TestCase):
             "Find reusable commit-specific candidate",
             "Build candidate image once",
             "Sign prepared candidate identity",
-            "Verify signed candidate identity and actual package",
+            "Verify candidate identity and actual package",
             "Validate exact Dagster candidate digest",
             "Publish the validated digest under release image tags",
             "Finalize semantic-release and GitHub Release",

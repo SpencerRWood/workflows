@@ -1,5 +1,6 @@
 """Real Git snapshots and signed-receipt policy for a static Node image."""
 import copy
+from contextlib import chdir
 import hashlib
 import json
 from pathlib import Path
@@ -119,3 +120,48 @@ class NodeProvenanceTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         provenance.verify(identity, repository, digest, evidence)
                 self.assertFalse(any(call.args[:2] == ("docker", "run") for call in calls.call_args_list))
+
+    def test_private_opt_out_preserves_image_and_input_checks_without_attestation_calls(self):
+        identity = self.prepare()
+        repository, digest = "ghcr.io/owner/node-fixture", "sha256:" + "c" * 64
+        config = {"Os": "linux", "Architecture": "amd64", "Config": {
+            "Healthcheck": {"Test": ["CMD", "check"]}, "Labels": {
+                "org.opencontainers.image.source": "https://github.com/owner/node-fixture",
+                "org.opencontainers.image.revision": identity["source_sha"],
+                "org.opencontainers.image.version": "v0.1.0",
+                "io.wood.release.inputs": identity["inputs_sha256"]}}}
+        evidence = Path(self.temporary.name) / "evidence"
+        evidence.mkdir()
+        for variation in ("valid", "wrong-source", "wrong-platform", "no-healthcheck", "changed-inputs"):
+            observed, expected = copy.deepcopy(config), copy.deepcopy(identity)
+            if variation == "wrong-source":
+                observed["Config"]["Labels"]["org.opencontainers.image.revision"] = "d" * 40
+            elif variation == "wrong-platform":
+                observed["Architecture"] = "arm64"
+            elif variation == "no-healthcheck":
+                del observed["Config"]["Healthcheck"]
+            elif variation == "changed-inputs":
+                expected["files"][0]["sha256"] = "d" * 64
+            with self.subTest(variation=variation), patch.object(provenance, "command",
+                    side_effect=["", json.dumps([observed])]) as calls:
+                if variation == "valid":
+                    provenance.verify(expected, repository, digest, evidence, require_attestations=False)
+                    self.assertEqual(json.loads((evidence / "attestation-policy.json").read_text()),
+                                     {"required": False, "verification": "disabled"})
+                else:
+                    with self.assertRaises(ValueError):
+                        provenance.verify(expected, repository, digest, evidence, require_attestations=False)
+                self.assertFalse(any(call.args[0] == "gh" for call in calls.call_args_list))
+
+    def test_unsigned_recovery_reconstructs_exact_source_and_rejects_source_changes(self):
+        identity = self.prepare()
+        evidence = Path(self.temporary.name) / "recovery"
+        evidence.mkdir()
+        with chdir(self.root):
+            recovered = provenance.recover_identity(self.environment, "sha256:" + "c" * 64,
+                                                    evidence, require_attestations=False)
+            self.assertEqual(identity, recovered)
+            (self.root / "frontend/package.json").write_text('{}')
+            with self.assertRaises((ValueError, KeyError)):
+                provenance.recover_identity(self.environment, "sha256:" + "c" * 64,
+                                           evidence, require_attestations=False)

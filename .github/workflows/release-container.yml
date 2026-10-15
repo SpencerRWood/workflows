@@ -3,6 +3,11 @@ name: Validate and publish container release
 on:
   workflow_call:
     inputs:
+      require_attestations:
+        description: Opt private repositories into required GitHub artifact attestations; public repositories retain the existing requirement.
+        type: boolean
+        required: false
+        default: false
       image_name:
         description: Optional image-name override for an independently validated declared image.
         type: string
@@ -167,6 +172,7 @@ jobs:
       APPROVED_REVISION: ${{ needs.authorization.outputs.approved_revision || inputs.approved_revision }}
       RECOVERY_APPROVED: ${{ inputs.recovery_approved || inputs.release_integration }}
       RELEASE_REF: ${{ github.ref }}
+      REQUIRE_ATTESTATIONS: ${{ inputs.require_attestations || github.event.repository.private != true }}
     outputs:
       released: ${{ steps.publish.outputs.released || 'false' }}
       release_tag: ${{ steps.publish.outputs.release_tag || steps.version.outputs.release_tag }}
@@ -363,7 +369,11 @@ jobs:
           DOCKERFILE: ${{ inputs.dockerfile || steps.config.outputs.container_dockerfile }}
           BUILD_CONTEXT: ${{ inputs.context || steps.config.outputs.container_context }}
           PLATFORMS: ${{ steps.config.outputs.container_platforms }}
-        run: python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" recover --evidence "$RUNNER_TEMP/release-evidence"
+          WORKING_DIRECTORY: ${{ steps.config.outputs.working_directory }}
+        run: |
+          options=()
+          if [[ "$REQUIRE_ATTESTATIONS" == false ]]; then options+=(--no-attestations); fi
+          python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" recover --evidence "$RUNNER_TEMP/release-evidence" "${options[@]}"
 
       - name: Build candidate image once
         id: candidate
@@ -413,7 +423,7 @@ jobs:
 
       - name: Attest candidate build provenance
         id: build_attestation
-        if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != ''
+        if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != '' && env.REQUIRE_ATTESTATIONS == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ steps.image.outputs.image_repository }}
@@ -423,7 +433,7 @@ jobs:
 
       - name: Sign prepared candidate identity
         id: receipt_attestation
-        if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != ''
+        if: (inputs.require_approval || inputs.release_integration) && steps.candidate.outputs.digest != '' && env.REQUIRE_ATTESTATIONS == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ steps.image.outputs.image_repository }}
@@ -433,7 +443,7 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
-      - name: Verify signed candidate identity and actual package
+      - name: Verify candidate identity and actual package
         if: steps.version.outputs.release_tag != '' && (inputs.require_approval || inputs.release_integration)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -441,7 +451,9 @@ jobs:
           IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           python "$RUNNER_TEMP/workflow-contract/scripts/release_head.py" --require-current
-          python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" verify --evidence "$RUNNER_TEMP/release-evidence"
+          options=()
+          if [[ "$REQUIRE_ATTESTATIONS" == false ]]; then options+=(--no-attestations); fi
+          python "$RUNNER_TEMP/workflow-contract/scripts/candidate_provenance.py" verify --evidence "$RUNNER_TEMP/release-evidence" "${options[@]}"
 
       - name: Validate exact Dagster candidate digest
         if: steps.version.outputs.release_tag != '' && steps.config.outputs.dagster_runtime_validation == 'true'

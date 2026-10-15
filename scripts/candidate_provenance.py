@@ -230,15 +230,28 @@ def verified_receipt(
     raise ValueError("missing or inconsistent signed candidate provenance")
 
 
-def verify(identity: dict, image_repository: str, digest: str, evidence: Path) -> None:
+def verify(identity: dict, image_repository: str, digest: str, evidence: Path,
+           *, require_attestations: bool = True) -> None:
     if not DIGEST.fullmatch(digest):
         raise ValueError("invalid registry digest")
-    image = image_repository + "@" + digest
+    if fingerprint(identity["files"]) != identity["inputs_sha256"]:
+        raise ValueError("candidate input fingerprint disagrees with identity")
+    if require_attestations:
+        verify_attestation(identity, image_repository, digest, evidence)
+    (evidence / "attestation-policy.json").write_text(canonical({
+        "required": require_attestations,
+        "verification": "passed" if require_attestations else "disabled",
+    }))
+    verify_image(identity, image_repository, digest, evidence)
+
+
+def verify_attestation(identity: dict, image_repository: str, digest: str,
+                       evidence: Path) -> None:
     raw = command(
         "gh",
         "attestation",
         "verify",
-        "oci://" + image,
+        "oci://" + image_repository + "@" + digest,
         "--repo",
         identity["repository"],
         "--signer-workflow",
@@ -257,6 +270,11 @@ def verify(identity: dict, image_repository: str, digest: str, evidence: Path) -
     )
     (evidence / "verified-attestations.json").write_text(raw)
     verified_receipt(json.loads(raw), identity, image_repository, digest)
+
+
+def verify_image(identity: dict, image_repository: str, digest: str,
+                 evidence: Path) -> None:
+    image = image_repository + "@" + digest
     expected = {
         "org.opencontainers.image.source": "https://github.com/"
         + identity["repository"],
@@ -316,8 +334,9 @@ def verify_python_package(image: str, platform: str, identity: dict) -> None:
         raise ValueError("candidate package version disagrees with receipt")
 
 
-def recover_identity(environment: dict, digest: str, evidence: Path) -> dict:
-    """Recover only the identity signed by this exact pinned build contract."""
+def recover_identity(environment: dict, digest: str, evidence: Path,
+                     *, require_attestations: bool = True) -> dict:
+    """Recover signed identity, or reconstruct exact checked-out inputs when opted out."""
     expected = {"repository": environment["GITHUB_REPOSITORY"],
                 "source_sha": environment["SOURCE_REVISION"],
                 "workflow_sha": environment["WORKFLOW_REVISION"],
@@ -329,6 +348,11 @@ def recover_identity(environment: dict, digest: str, evidence: Path) -> dict:
         raise ValueError("recovery requires immutable source and workflow revisions")
     if not DIGEST.fullmatch(digest):
         raise ValueError("recovery requires a prior candidate digest")
+    if not require_attestations:
+        identity = prepare(Path(command("git", "rev-parse", "--show-toplevel")),
+                           evidence / "recovered-inputs", environment)
+        (evidence / "identity.json").write_text(canonical(identity))
+        return identity
     image_repository = environment["IMAGE_REPOSITORY"]
     results = json.loads(command(
         "gh", "attestation", "verify", "oci://" + image_repository + "@" + digest,
@@ -392,16 +416,21 @@ def main() -> int:
     )
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path)
+    parser.add_argument("--no-attestations", action="store_true",
+                        help="Explicit private-repository policy: retain image checks without cryptographic attestations.")
     args = parser.parse_args()
     args.evidence.mkdir(parents=True, exist_ok=True)
     path = args.evidence / "identity.json"
     try:
+        if args.no_attestations and args.phase not in {"verify", "recover"}:
+            raise ValueError("attestation policy applies only to verification/recovery")
         if args.phase == "capture":
             (args.evidence / "build-metadata.json").write_text(
                 canonical(json.loads(os.environ["BUILD_METADATA"]))
             )
         elif args.phase == "recover":
-            recover_identity(dict(os.environ), os.environ["IMAGE_DIGEST"], args.evidence)
+            recover_identity(dict(os.environ), os.environ["IMAGE_DIGEST"], args.evidence,
+                             require_attestations=not args.no_attestations)
         elif args.phase == "prepare":
             if args.snapshot is None:
                 raise ValueError("explicit fresh snapshot path required")
@@ -441,6 +470,7 @@ def main() -> int:
                     os.environ["IMAGE_REPOSITORY"],
                     os.environ["IMAGE_DIGEST"],
                     args.evidence,
+                    require_attestations=not args.no_attestations,
                 )
             else:
                 verify_finalized(
