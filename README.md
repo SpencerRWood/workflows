@@ -492,6 +492,27 @@ provisioning are outside this release contract.
 
 ### Partial release recovery
 
+Container releases skip GitHub artifact attestation generation and verification
+by default for private repositories. Public repositories retain required
+attestations; private callers can opt in with `require_attestations: true` on
+`release-container.yml` or `release-containers.yml`. Disabling attestations does
+not disable validation, approved revision checks, immutable digest verification,
+OCI source/version/input labels, platform/package checks or Node health checks.
+No alternative signing mechanism is used.
+
+For separately authorized recovery of a private candidate stopped before
+attestation, retain the original approved main revision and digest. The published
+`candidate_provenance.py recover --no-attestations --evidence <directory>` helper
+reconstructs its identity from the exact clean source checkout using the original
+`SOURCE_REVISION`, `WORKFLOW_REVISION`, `RELEASE_TAG`, `GITHUB_REPOSITORY`,
+`DOCKERFILE`, `BUILD_CONTEXT`, `PLATFORMS`, and `IMAGE_DIGEST` environment inputs.
+Use `verify --no-attestations` with `IMAGE_REPOSITORY`/`IMAGE_DIGEST` to check
+the retained image against that identity, and run the existing exact-digest health
+check before promotion. This is unsigned metadata verification, not cryptographic
+provenance. Existing registry promotion and central semantic-release finalization
+helpers retain their approval, current-main, version and conflict protections.
+Never relabel an existing candidate as another source revision or rebuild over it.
+
 If semantic-release pushes a version commit and then fails to push its tag or
 create its GitHub release, dispatch a **fresh Release run on main**. The consumer
 must expose `workflow_dispatch` and pass its optional `recovery_tag` string to

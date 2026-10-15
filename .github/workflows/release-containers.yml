@@ -3,6 +3,11 @@ name: Publish coordinated container images
 on:
   workflow_call:
     inputs:
+      require_attestations:
+        description: Opt private repositories into required GitHub artifact attestations.
+        type: boolean
+        required: false
+        default: false
       workflow_revision:
         description: Immutable helper SHA pinned to this reusable workflow.
         type: string
@@ -154,6 +159,7 @@ jobs:
       dockerfile: ${{ matrix.image.dockerfile }}
       context: ${{ matrix.image.context }}
       finalize_release: false
+      require_attestations: ${{ inputs.require_attestations }}
     secrets:
       dbt_host: ${{ secrets.dbt_host }}
       dbt_user: ${{ secrets.dbt_user }}
