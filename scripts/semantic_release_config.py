@@ -20,6 +20,9 @@ def main() -> None:
     config = pyproject["tool"]["semantic_release"]
     # Enforce publication policy centrally without rewriting consumer repositories.
     config["branches"] = {"main": {"match": "^main$", "prerelease": False}}
+    # The existing central publisher supplies the repository-scoped Actions
+    # token under this one supported environment name for every consumer type.
+    config.setdefault("remote", {})["token"] = {"env": "GITHUB_TOKEN"}
     # Tag-at-merge publication may prepare static version files/build assets in
     # the runner without committing or pushing a generated main revision.
     config["commit_parser"] = f"{Path(__file__).with_name('dependency_release_parser.py').resolve()}:DependencyReleaseParser"
