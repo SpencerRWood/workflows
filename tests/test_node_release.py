@@ -43,7 +43,7 @@ class NodeReleaseTests(unittest.TestCase):
         git("commit", "-qm", "chore: baseline")
         git("commit", "-qm", "feat: first Node application", "--allow-empty")
         config = Path(self.temp.name) / "semantic.json"
-        subprocess.run([sys.executable, str(ROOT / "scripts/semantic_release_config.py"), str(self.root / "pyproject.toml"), str(config), "--tag-merged-commit"], check=True)
+        subprocess.run([sys.executable, str(ROOT / "scripts/semantic_release_config.py"), str(self.root / "pyproject.toml"), str(config)], check=True)
         self.assertFalse(json.loads(config.read_text())["semantic_release"].get("version_toml"))
         executable = Path(sys.executable).parent / "semantic-release"
         self.assertTrue(executable.is_file())
@@ -68,12 +68,14 @@ class NodeReleaseTests(unittest.TestCase):
                 self.assertIn("--no-deps --require-hashes", install["run"])
                 self.assertNotIn("uv ", install["run"])
 
-    def test_metadata_only_policy_cannot_update_version_files(self):
+    def test_tag_at_merge_preserves_local_version_preparation_configuration(self):
         path = self.root / "pyproject.toml"
         path.write_text('[tool.semantic_release]\nversion_variables=["frontend/package.json:version"]\n')
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/semantic_release_config.py"), str(path), str(self.root / "semantic.json"), "--tag-merged-commit"], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("cannot update version files", result.stderr)
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/semantic_release_config.py"), str(path), str(self.root / "semantic.json")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = json.loads((self.root / "semantic.json").read_text())
+        self.assertEqual(generated["semantic_release"]["version_variables"],
+                         ["frontend/package.json:version"])
 
     def test_health_gate_rejects_mutable_identity_before_docker(self):
         sys.path.insert(0, str(ROOT / "scripts"))

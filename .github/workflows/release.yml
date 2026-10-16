@@ -205,13 +205,13 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
           RECOVERY_TAG: ${{ inputs.recovery_tag }}
           EXPECTED_TAG: ${{ needs.authorization.outputs.release_tag || inputs.expected_tag }}
-          RELEASE_INTEGRATION: ${{ inputs.release_integration }}
+          RELEASE_INTEGRATION: ${{ inputs.release_integration || steps.config.outputs.tag_merged_commit == 'true' }}
         run: |
           config_options=()
           if [[ "${{ steps.config.outputs.tag_merged_commit }}" == 'true' ]]; then
             config_options+=(--tag-merged-commit)
           fi
-          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json" "${config_options[@]}"
+          python "$RUNNER_TEMP/workflow-contract/scripts/semantic_release_config.py" pyproject.toml "$RUNNER_TEMP/semantic-release-config.json"
           if [[ "${{ inputs.release_integration }}" == true && ${#config_options[@]} == 0 ]]; then
             config_options+=(--tag-merged-commit)
           fi

@@ -200,8 +200,6 @@ def main() -> None:
     tag_merged_commit = boolean(release.get("tag_merged_commit"), "release.tag_merged_commit")
     if not python_enabled and (python_package or not tag_merged_commit):
         fail("Node-only releases require tag_merged_commit = true and no Python package.")
-    if tag_merged_commit and python_package:
-        fail("release.tag_merged_commit requires build.python_package = false.")
     dagster = mapping(config.get("dagster", {}), "dagster")
     container = mapping(config.get("container", {}), "container")
     container_publish = boolean(container.get("publish"), "container.publish")

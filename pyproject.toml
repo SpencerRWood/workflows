@@ -1,32 +1,44 @@
-[dependency-groups]
-dev = ["pytest==8.4.2", "PyYAML==6.0.3", "python-semantic-release==10.6.2"]
+["dependency-groups"]
+"dev" = ["pytest==8.4.2", "PyYAML==6.0.3", "python-semantic-release==10.6.2"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+["tool"]
 
-[tool.uv.workspace]
-members = []
+["tool"."pytest"]
 
-[tool.wood.verify]
-version = 1
-retry_safe = true
+["tool"."pytest"."ini_options"]
+"testpaths" = ["tests"]
 
-[[tool.wood.verify.checks]]
-name = "workflow-yaml"
-argv = ["actionlint", "-color"]
-timeout_seconds = 60
+["tool"."uv"]
 
-[tool.wood.architecture]
-domain = "engineering"
-capability = "release-control"
-kind = "workflow"
+["tool"."uv"."workspace"]
+"members" = []
 
-[tool.wood.openproject]
-project_id = 3
-initiative_id = 552
+["tool"."wood"]
 
-[tool.wood.branching]
-strategy = "integration"
-release_id = 26
-integration_branch = "development"
-scope_reference = "OP-555 activity 1414: explicit workflows development setup approval, 2026-10-14"
+["tool"."wood"."verify"]
+"version" = 1
+"retry_safe" = true
+"checks" = [{ "name" = "workflow-yaml", "argv" = ["actionlint", "-color"], "timeout_seconds" = 60 }]
+
+["tool"."wood"."architecture"]
+"domain" = "engineering"
+"capability" = "release-control"
+"kind" = "workflow"
+
+["tool"."wood"."openproject"]
+"project_id" = 3
+"initiative_id" = 552
+
+["tool"."wood"."branching"]
+"strategy" = "integration"
+"release_id" = 26
+"integration_branch" = "development"
+"scope_reference" = "https://projects.woodhost.cloud/work_packages/558; user approved Wave 1 existing-repository migration on 2026-10-15; preserve reusable APIs and dirty primary work; no main release or live protection authorization."
+
+["tool"."semantic_release"]
+"allow_zero_version" = true
+"major_on_zero" = false
+"tag_format" = "v{version}"
+
+["tool"."semantic_release"."remote"]
+"type" = "github"
