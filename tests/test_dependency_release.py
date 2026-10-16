@@ -62,6 +62,7 @@ class DependencyReleaseTests(unittest.TestCase):
             self.assertEqual(config["commit_parser_options"]["patch_tags"], ["fix", "perf"])
             self.assertTrue(config["commit_parser"].endswith("dependency_release_parser.py:DependencyReleaseParser"))
             self.assertEqual(config["branches"], {"main": {"match": "^main$", "prerelease": False}})
+            self.assertEqual(config["remote"]["token"], {"env": "GITHUB_TOKEN"})
 
     def test_shared_workflow_uses_generated_config(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
