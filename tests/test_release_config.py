@@ -18,6 +18,25 @@ VALIDATION_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "val
 class ReleaseConfigTests(unittest.TestCase):
     """Exercise supported and invalid configuration combinations."""
 
+    def test_explicit_branching_policies_and_unchanged_application_default(self):
+        base = 'version = 1\n[python]\n[validation]\nchecks = ["pytest"]\n[release]\nsemantic_release = true\n'
+        for policy, branch, model in [('infrastructure', 'main', 'incremental'),
+                                      ('application', 'development', 'promotion')]:
+            result, outputs = self.run_config(base + f'[branching]\npolicy = "{policy}"\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'branching_policy={policy}\n', outputs)
+            self.assertIn(f'integration_branch={branch}\n', outputs)
+            self.assertIn(f'release_model={model}\n', outputs)
+        result, implicit = self.run_config(base)
+        explicit, outputs = self.run_config(base + '[branching]\npolicy = "application"\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertEqual(dict(line.split('=', 1) for line in implicit.splitlines()),
+                         dict(line.split('=', 1) for line in outputs.splitlines()))
+        result, _ = self.run_config(base + '[branching]\npolicy = "unknown"\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('branching.policy', result.stderr)
+
     def run_config(self, config: str, files: tuple[str, ...] = (), *, validation_only: bool = False) -> tuple[subprocess.CompletedProcess[str], str]:
         """Run the loader against a small representative consumer checkout."""
         with tempfile.TemporaryDirectory() as temporary_directory:
