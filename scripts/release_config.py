@@ -26,8 +26,9 @@ VALID_CHECKS = frozenset(
     }
 )
 VALID_NODE_CHECKS = frozenset({"lint", "format", "typecheck", "test", "build"})
-TOP_LEVEL_TABLES = frozenset({"version", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "runtime", "container", "release", "delivery"})
+TOP_LEVEL_TABLES = frozenset({"version", "branching", "project", "python", "validation", "coverage", "build", "node", "dbt", "dagster", "runtime", "container", "release", "delivery"})
 TABLE_FIELDS = {
+    "branching": frozenset({"policy"}),
     "project": frozenset({"working_directory"}),
     "python": frozenset({"version", "dependency_group"}),
     "validation": frozenset({"checks"}),
@@ -151,7 +152,9 @@ def main() -> None:
     validation = mapping(config.get("validation"), "validation")
     release = mapping(config.get("release"), "release")
     delivery = mapping(config.get("delivery", {}), "delivery")
+    branching = mapping(config.get("branching", {}), "branching")
     for table_name, table in {
+        "branching": branching,
         "project": project,
         "python": python,
         "validation": validation,
@@ -166,6 +169,10 @@ def main() -> None:
         "delivery": delivery,
     }.items():
         validate_table_fields(table, table_name)
+
+    policy = string(branching.get("policy"), "branching.policy", "application")
+    if policy not in {"infrastructure", "application"}:
+        fail("branching.policy must be infrastructure or application.")
 
     # Delivery evidence policy belongs to the consumer/Wood Tools. Validate its
     # additive metadata without changing any release, validation or runtime gate.
@@ -271,6 +278,9 @@ def main() -> None:
         if not (python_root / profiles_example).is_file():
             fail(f"dbt.profiles_example '{profiles_example}' was not found in project.working_directory.")
 
+    emit("branching_policy", policy)
+    emit("integration_branch", "main" if policy == "infrastructure" else "development")
+    emit("release_model", "incremental" if policy == "infrastructure" else "promotion")
     emit("working_directory", working_directory)
     emit("python_version", python_version)
     emit("python_enabled", python_enabled)
