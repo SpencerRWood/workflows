@@ -407,7 +407,7 @@ def verify_and_merge(
         str(number),
         "--repo",
         cfg.repository,
-        "--squash",
+        "--merge",
         "--delete-branch",
         "--match-head-commit",
         sha,
