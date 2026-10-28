@@ -358,6 +358,38 @@ class PullTests(unittest.TestCase):
             verify_and_merge(31, self.cfg)
         command.assert_not_called()
 
+    def test_validated_promotion_uses_protected_merge_commit(self) -> None:
+        with (
+            patch(
+                "verify_container_promotion_pr.pull_and_files",
+                return_value=(self.pull, self.files),
+            ),
+            patch(
+                "verify_container_promotion_pr.status_on_head", return_value="success"
+            ),
+            patch("verify_container_promotion_pr.main_pin", return_value=OLD),
+            patch("verify_container_promotion_pr.command") as command,
+            patch(
+                "verify_container_promotion_pr.api", return_value={"merged": True}
+            ) as api,
+        ):
+            verify_and_merge(31, self.cfg)
+        command.assert_called_once_with(
+            "gh",
+            "pr",
+            "merge",
+            "31",
+            "--repo",
+            self.cfg.repository,
+            "--merge",
+            "--delete-branch",
+            "--match-head-commit",
+            self.sha,
+            "--subject",
+            self.cfg.title,
+        )
+        api.assert_called_once_with(f"repos/{self.cfg.repository}/pulls/31")
+
 
 if __name__ == "__main__":
     unittest.main()
