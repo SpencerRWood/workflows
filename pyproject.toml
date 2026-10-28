@@ -27,13 +27,13 @@
 
 ["tool"."wood"."openproject"]
 "project_id" = 3
-"initiative_id" = 552
+"initiative_id" = 571
 
 ["tool"."wood"."branching"]
 "strategy" = "integration"
-"release_id" = 26
+"release_id" = 29
 "integration_branch" = "development"
-"scope_reference" = "https://projects.woodhost.cloud/work_packages/558; user approved Wave 1 existing-repository migration on 2026-10-15; preserve reusable APIs and dirty primary work; no main release or live protection authorization."
+"scope_reference" = "Codex user approved the shared container promotion merge-method fix, Documentation Automation planning release 29, development-to-main publication and consumer pin rollout on 2026-10-28; preserve unrelated work and branch protections."
 
 ["tool"."semantic_release"]
 "allow_zero_version" = true

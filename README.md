@@ -398,7 +398,9 @@ semantic_release = true
 image to one image pin in `infrastructure/environments/dev.yml`. It creates or
 reuses an infrastructure PR, waits up to 20 minutes for the trusted
 `infrastructure-validation` commit status on its exact head SHA, rechecks the
-one-line diff, and squash-merges the dev PR. Infrastructure then performs its
+one-line diff, and merges the dev PR with a merge commit. The target repository
+must permit merge commits; its required checks and branch protections still apply.
+Infrastructure then performs its
 own semantic patch release and Beelink dev deployment. This workflow never
 deploys or promotes production.
 
@@ -463,7 +465,7 @@ The required secret is `infrastructure_token`.
 callers cannot select another manifest. The `@v1` contract remains available
 for callers that have not migrated.
 The workflow derives the branch `chore/<image_name>-<release_tag>` and the
-PR, commit, and squash-merge title
+PR, commit, and merge-commit title
 `chore(deps): update <image_name> to <release_tag>` from its validated inputs.
 The workflow accepts only the dev environment file and a single top-level
 `<app>_image_ref` key. The four
