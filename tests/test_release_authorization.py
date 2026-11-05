@@ -23,8 +23,7 @@ from release_images import image_matrix
 class ReleaseAuthorizationTests(unittest.TestCase):
     def setUp(self):
         self.revision, self.head, self.base = "a" * 40, "b" * 40, "c" * 40
-        self.mapping = {"strategy": "integration", "release_id": 26,
-                        "integration_branch": "development", "scope_reference": "approved-scope"}
+        self.mapping = {"strategy": "integration", "integration_branch": "development"}
         self.rules = [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
                       {"type": "required_status_checks", "parameters": {"required_status_checks":
                           [{"context": "release-readiness", "integration_id": 15368},
@@ -70,7 +69,7 @@ class ReleaseAuthorizationTests(unittest.TestCase):
         with patch.object(authorization, "api", self.api), patch.object(authorization, "git", self.git), \
                 patch.object(authorization, "readiness_evidence", return_value={
                     "incident": kwargs.get("incident", ""), "hotfix_approval": kwargs.get("approval", ""),
-                    "scope": {"deferrals": {}}, "next_tag": "v1.0.0"}), \
+                    "next_tag": "v1.0.0"}), \
                 patch.object(authorization.subprocess, "run") as ancestry:
             result = authorization.authorize("owner/repo", self.revision, self.mapping,
                                              "release-readiness", workflow_revision="d" * 40, **kwargs)
@@ -164,6 +163,28 @@ class ReleaseAuthorizationTests(unittest.TestCase):
 class WorkflowIntegrationTests(unittest.TestCase):
     def workflow(self, name):
         return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+
+    def test_private_evidence_permissions_are_read_only_and_forwarded_through_callers(self):
+        required = {"contents": "read", "actions": "read", "checks": "read", "pull-requests": "read"}
+        self.assertEqual(self.workflow("authorize-operation.yml")["jobs"]["authorize"]["permissions"], required)
+        for name in ("release.yml", "release-container.yml", "release-containers.yml", "container-release.yml", "deploy-ansible.yml"):
+            self.assertEqual(self.workflow(name)["jobs"]["authorization"]["permissions"], required)
+        multi = self.workflow("release-containers.yml")["jobs"]
+        for job in ("images", "finalize"):
+            for key in ("actions", "checks", "pull-requests"):
+                self.assertEqual(multi[job]["permissions"][key], "read")
+        caller = yaml.safe_load((ROOT / "tests/fixtures/br02/release.yml").read_text())
+        self.assertNotIn("secrets", caller["jobs"]["release"])
+        for key in ("actions", "checks", "pull-requests"):
+            self.assertEqual(caller["jobs"]["release"]["permissions"][key], "read")
+
+    def test_readiness_interface_has_no_planning_inputs_or_credentials(self):
+        document = self.workflow("release-readiness.yml")
+        contract = document.get("on", document.get(True))["workflow_call"]
+        self.assertNotIn("scope_file", contract["inputs"])
+        self.assertNotIn("deferred_stories", contract["inputs"])
+        self.assertNotIn("openproject_api_token", contract["secrets"])
+        self.assertNotIn("OPENPROJECT_", str(document["jobs"]))
 
     def test_validation_and_readiness_have_no_publication_credentials(self):
         for name in ("release-readiness.yml",):

@@ -15,7 +15,6 @@ import urllib.parse
 from pathlib import Path
 
 from release_readiness import KIND
-from release_scope import repository_scope
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
@@ -71,14 +70,15 @@ def readiness_evidence(repository: str, check: dict, head: str, workflow: str,
                         "--name", f"release-readiness-{head}-{run_id}-{attempt}", "--dir", temporary], check=True)
         root = Path(temporary)
         record = json.loads((root / "readiness.json").read_text())
-        require(record.get("kind") == KIND and record.get("version") == 1
+        require(record.get("kind") == KIND and record.get("version") == 2
                 and record.get("passed") is True, "invalid readiness record")
         require(record["repository"] == repository and record["candidate_revision"] == head
-                and record["target_revision"] == target and record["branching"] == mapping
+                and record["target_revision"] == target and record["branching"] == {
+                    key: mapping[key] for key in ("strategy", "integration_branch")}
                 and record["workflow_revision"] == workflow and str(record["run_id"]) == run_id
                 and int(record["attempt"]) == run["run_attempt"]
                 and before_merge(record["observed_at"], merged_at), "readiness binding differs")
-        filenames = {"scope": "scope-release.log", "validation": "validation.log",
+        filenames = {"validation": "validation.log",
                      "integration": "integration.log", "security": "security.log",
                      "semantic-impact": "semantic-impact.log"}
         require(set(record["checks"]) == set(filenames), "mandatory readiness checks missing")
@@ -92,19 +92,6 @@ def readiness_evidence(repository: str, check: dict, head: str, workflow: str,
             require(record["checks"][name]["state"] == "passed"
                     and record["checks"][name]["log_sha256"] == hashlib.sha256((root / filename).read_bytes()).hexdigest(),
                     f"readiness check/log differs: {name}")
-        require(record["scope"]["release_id"] == mapping["release_id"]
-                and record["scope"]["scope_reference"] == mapping["scope_reference"], "readiness scope differs")
-        if "source" in record["scope"]:
-            require(record["scope"]["source"]["type"] == "repository", "unknown scope authority")
-            repository_root = Path(git("rev-parse", "--show-toplevel"))
-            document = tomllib.loads(git("show", head + ":pyproject.toml"))
-            expected = repository_scope(repository_root, head, record["scope"]["source"]["path"],
-                                        mapping, document["tool"]["wood"]["openproject"])
-            require(record["scope"] == expected, "repository scope receipt differs from committed authority")
-        else:
-            require(bool(record["scope"]["stories"]) and all(s["status"] in {"Closed", "Rejected"}
-                    or str(s["id"]) in record["scope"]["deferrals"] for s in record["scope"]["stories"]),
-                    "unfinished release Stories")
         subprocess.run(["git", "check-ref-format", "refs/tags/" + record["next_tag"]], check=True)
         return record
 
@@ -116,11 +103,10 @@ def authorize(repository: str, revision: str, mapping: dict, readiness: str,
             "invalid repository")
     require(bool(SHA.fullmatch(revision)), "revision must be a full SHA")
     require(mapping.get("strategy") == "integration", "integration adoption required")
-    require(type(mapping.get("release_id")) is int and mapping["release_id"] > 0
-            and bool(mapping.get("scope_reference")), "approved planning scope required")
     development = mapping.get("integration_branch")
     require(isinstance(development, str) and development not in {"", "main"},
             "development branch mapping required")
+    mapping = {"strategy": "integration", "integration_branch": development}
     require(bool(readiness), "release readiness check required")
     require(bool(SHA.fullmatch(workflow_revision)), "pinned verifier revision required")
     require(bool(incident) == bool(approval), "hotfix requires incident and approval references")
@@ -236,11 +222,6 @@ def authorize(repository: str, revision: str, mapping: dict, readiness: str,
     require(record is not None and record["incident"] == incident and record["hotfix_approval"] == approval,
             "readiness hotfix authority differs")
     require(not deployment_tag or deployment_tag == record["next_tag"], "deployment release identity differs from approved plan")
-    deferred = record["scope"]["deferrals"]
-    if deferred:
-        marker = "Release-Deferrals: " + ",".join(sorted(deferred, key=int))
-        require(any(marker in c.get("body", "").splitlines() for c in approval_comments()),
-                "release deferrals require explicit premerge approval")
     return {"repository": repository, "revision": revision, "candidate_revision": head,
             "prior_main_revision": parents[0], "pr": pr["number"], "pr_url": pr["html_url"],
             "branching": mapping, "reviews": [r["html_url"] for r in approved],

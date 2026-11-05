@@ -9,18 +9,22 @@ jobs:
   release:
     permissions:
       contents: write
+      actions: read
+      checks: read
+      pull-requests: read
     uses: SpencerRWood/workflows/.github/workflows/release.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     with:
       workflow_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       release_integration: true
       readiness_check: readiness / release-readiness
-    secrets:
-      release_read_token: ${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}
   deploy:
     needs: release
     if: needs.release.outputs.released == 'true'
     permissions:
       contents: read
+      actions: read
+      checks: read
+      pull-requests: read
       deployments: write
     uses: SpencerRWood/workflows/.github/workflows/deploy-ansible.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     with:
@@ -36,5 +40,3 @@ jobs:
       health_check_command: bash scripts/health-check-dev.sh
       privileged_rollback_command: bash scripts/rollback-deployment.sh
       deployment_state_file: /var/lib/github-actions-deployments/infrastructure-dev.json
-    secrets:
-      release_read_token: ${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}

@@ -11,6 +11,9 @@ on:
         required: false
 permissions:
   contents: read
+  actions: read
+  checks: read
+  pull-requests: read
   deployments: write
 jobs:
   deploy:

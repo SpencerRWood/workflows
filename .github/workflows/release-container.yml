@@ -129,6 +129,11 @@ concurrency:
 
 jobs:
   authorization:
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
     uses: ./.github/workflows/authorize-operation.yml
     with:
       workflow_revision: ${{ inputs.workflow_revision }}
