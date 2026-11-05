@@ -1,4 +1,4 @@
-"""Local Git/PSR release candidate execution with mocked live planning authority."""
+"""Local Git/PSR technical release checks without a planning authority."""
 import copy
 from datetime import datetime, timezone
 import hashlib
@@ -40,9 +40,8 @@ class CandidateFixture(unittest.TestCase):
             '[project]\nname="fixture"\nversion="0.1.0"\n'
             '[tool.semantic_release]\nversion_toml=["pyproject.toml:project.version"]\n'
             'allow_zero_version=true\n[tool.semantic_release.remote]\nurl="https://github.com/owner/fixture.git"\n'
-            '[tool.wood.openproject]\nproject_id=3\ninitiative_id=552\n'
-            '[tool.wood.branching]\nstrategy="integration"\nrelease_id=26\n'
-            'integration_branch="development"\nscope_reference="approved-scope"\n')
+            '[tool.wood.branching]\nstrategy="integration"\n'
+            'integration_branch="development"\n')
         (self.root / ".github/release.toml").write_text(
             'version=1\n[python]\n[validation]\nchecks=["pytest"]\n[release]\nsemantic_release=true\n')
         (self.root / ".venv").symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
@@ -56,9 +55,7 @@ class CandidateFixture(unittest.TestCase):
         self.git("commit", "-q", "--allow-empty", "-m", "fix: Story two")
         self.head = self.git("rev-parse", "HEAD")
         self.git("push", "-q", "origin", "development")
-        self.mapping = {"strategy": "integration", "release_id": 26,
-                        "integration_branch": "development", "scope_reference": "approved-scope"}
-        self.story_status = "Closed"
+        self.mapping = {"strategy": "integration", "integration_branch": "development"}
         self.env = {"CANDIDATE_REVISION": self.head, "TARGET_REVISION": self.base,
                     "CANDIDATE_BRANCH": "development", "GITHUB_REPOSITORY": "owner/fixture",
                     "WORKFLOW_REVISION": "d" * 40, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
@@ -75,16 +72,6 @@ class CandidateFixture(unittest.TestCase):
         if args == ["contract"]:
             data = {"branching": {"version": 1, "strategies": ["trunk", "release", "integration"],
                                   "branch_prefixes": ["feature", "feat", "fix"]}}
-        elif args[:2] == ["release", "get"]:
-            data = {"release": {"id": 26, "name": "R1", "status": "open", "project": {"id": 3}}}
-        elif args[:2] == ["story", "list"]:
-            data = {"stories": [{"id": 1, "version": {"id": 26}, "project": {"id": 3}, "status": self.story_status}],
-                    "total": 1, "next_offset": None}
-        elif args == ["repo", "release-readiness"]:
-            # Real ancestry is checked; the external Wood authority is mocked.
-            current_main = self.git("ls-remote", "origin", "refs/heads/main").split("\t")[0]
-            subprocess.run(["git", "merge-base", "--is-ancestor", current_main, self.head], check=True)
-            data = {"main_revision": current_main, "integration_revision": self.head, "main_in_integration": True}
         elif args == ["repo", "validate"]:
             check = subprocess.run([sys.executable, "-c", "import app; assert app.result == 42"],
                                    env=kwargs.get("env"), capture_output=True)
@@ -103,31 +90,28 @@ class CandidateFixture(unittest.TestCase):
 
 
 class ReleaseReadinessTests(CandidateFixture):
-    def test_complete_candidate_runs_scope_checks_and_real_semantic_impact_without_publication(self):
+    def test_candidate_without_planning_metadata_runs_technical_checks_without_publication(self):
         record = self.collect()
         self.assertEqual(record["next_tag"], "v0.2.0")
-        self.assertEqual(set(record["checks"]), {"scope", "validation", "integration", "security", "semantic-impact"})
+        self.assertEqual(set(record["checks"]), {"validation", "integration", "security", "semantic-impact"})
+        self.assertNotIn("scope", record)
+        self.assertEqual(record["version"], 2)
         self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
         self.assertEqual(self.git("ls-remote", "origin", "refs/tags/v0.2.0"), "")
         for path in self.evidence.iterdir():
             self.assertNotIn("fixture-only-secret", path.read_text())
 
-    def test_true_commands_do_not_bypass_unfinished_scope(self):
-        self.story_status = "In progress"
-        with self.assertRaisesRegex(ValueError, "not complete"):
-            self.collect(integration="true", security="true")
-        self.assertFalse((self.evidence / "readiness.json").exists())
+    def test_no_planning_token_or_file_is_needed_and_no_planning_command_is_called(self):
+        self.env.pop("OPENPROJECT_API_TOKEN")
+        self.collect()
+        self.assertFalse((self.evidence / "scope-release.log").exists())
 
-    def test_wrong_release_association_and_empty_scope_fail(self):
-        original = self.wood
-        def wrong(args, log, **kwargs):
-            data = original(args, log, **kwargs)
-            if args[:2] == ["release", "get"]:
-                data["release"]["id"] = 999999
-            return data
-        with patch.dict(os.environ, self.env), patch.object(readiness, "wood", wrong):
-            with self.assertRaisesRegex(ValueError, "planning release"):
-                readiness.collect(self.evidence, "true", "true")
+    def test_advanced_remote_candidate_fails_before_checks(self):
+        self.git("commit", "-q", "--allow-empty", "-m", "fix: next candidate")
+        self.git("push", "-q", "origin", "development")
+        self.git("checkout", "-q", "--detach", self.head)
+        with self.assertRaisesRegex(ValueError, "candidate advanced"):
+            self.collect()
 
     def test_failed_security_blocks_record_before_release(self):
         with self.assertRaisesRegex(ValueError, "security.log"):
@@ -139,10 +123,16 @@ class ReleaseReadinessTests(CandidateFixture):
             self.collect(integration='printf "result = 43\\n" > app.py', security="true")
         self.assertFalse((self.evidence / "readiness.json").exists())
 
-    def test_deferrals_are_explicit_and_scoped(self):
-        self.story_status = "New"
-        result = self.collect(deferrals={"1": "separate explicitly reviewed follow-up"})
-        self.assertEqual(result["scope"]["deferrals"], {"1": "separate explicitly reviewed follow-up"})
+    def test_tag_at_merge_uses_supported_generator_interface_without_publication(self):
+        capability = self.root / ".github/release.toml"
+        capability.write_text(capability.read_text() + "tag_merged_commit=true\n")
+        self.git("add", ".github/release.toml")
+        self.git("commit", "-qm", "fix: use tag at merge")
+        self.head = self.git("rev-parse", "HEAD")
+        self.env["CANDIDATE_REVISION"] = self.head
+        self.git("push", "-q", "origin", "development")
+        self.assertEqual(self.collect()["next_tag"], "v0.2.0")
+        self.assertEqual(self.git("ls-remote", "origin", "refs/tags/v0.2.0"), "")
 
     def test_hotfix_preserves_main_ancestry_and_records_incident(self):
         self.git("checkout", "-qb", "fix/op-1-incident", self.base)

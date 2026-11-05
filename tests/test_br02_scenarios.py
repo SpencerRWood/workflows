@@ -259,16 +259,18 @@ class ReleaseLifecycleTests(CandidateFixture):
                    "base": {"ref": "main", "repo": {"full_name": "owner/fixture"}}}
         self.assertEqual(self.publish(), (True, "v0.1.1"))
         self.git("checkout", "-q", "development")
+        self.git("push", "-q", "--force", "origin", "development")
         self.env.update(CANDIDATE_REVISION=self.git("rev-parse", "HEAD"), CANDIDATE_BRANCH="development",
                         TARGET_REVISION=self.revision, HOTFIX_INCIDENT="", HOTFIX_APPROVAL="")
         self.head = self.env["CANDIDATE_REVISION"]
         self.evidence = Path(self.temporary.name) / "unreconciled"
-        with self.assertRaises(subprocess.CalledProcessError):
+        with self.assertRaisesRegex(ValueError, "branch-readiness.log"):
             self.collect()
         self.git("merge", "-q", "--no-ff", "main", "-m", "Reconcile approved hotfix")
         self.head = self.git("rev-parse", "HEAD")
         self.env["CANDIDATE_REVISION"] = self.head
         self.evidence = Path(self.temporary.name) / "reconciled"
+        self.git("push", "-q", "origin", "development")
         self.collect()
 
     def test_12_publication_and_deployment_failure_retries_preserve_identity(self):

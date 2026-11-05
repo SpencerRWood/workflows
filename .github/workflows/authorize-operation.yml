@@ -76,6 +76,11 @@ permissions:
 
 jobs:
   authorize:
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
     runs-on: ubuntu-latest
     outputs:
       approved_revision: ${{ steps.integration.outputs.approved_revision }}

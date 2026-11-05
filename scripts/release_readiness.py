@@ -1,4 +1,4 @@
-"""Run mandatory scope, accumulated checks and nonpublishing semantic inspection."""
+"""Run accumulated technical checks and nonpublishing semantic inspection."""
 from __future__ import annotations
 
 import argparse
@@ -12,8 +12,6 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
-
-from release_scope import repository_scope
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 KIND = "wood-shared-release-readiness"
@@ -49,38 +47,6 @@ def wood(args: list[str], log: Path, *, env: dict | None = None) -> dict:
     return result["data"]
 
 
-def verify_scope(mapping: dict, context: dict, evidence: Path, deferrals: dict) -> dict:
-    release = wood(["release", "get", str(mapping["release_id"])], evidence / "scope-release.log")["release"]
-    require(release["id"] == mapping["release_id"] and release["status"] == "open"
-            and release["project"]["id"] == context["project_id"], "planning release is not open in this project")
-    stories, offset = [], 0
-    for page in range(40):
-        data = wood(["story", "list", "--version", release["name"], "--offset", str(offset)],
-                    evidence / f"scope-stories-{page}.log")
-        stories.extend(data["stories"])
-        if data["next_offset"] is None:
-            require(len(stories) == data["total"], "incomplete release scope")
-            break
-        require(data["next_offset"] > offset, "invalid scope pagination")
-        offset = data["next_offset"]
-    else:
-        raise ValueError("release scope exceeds inspection bound")
-    identifiers = {str(s["id"]) for s in stories}
-    require(bool(stories) and len(identifiers) == len(stories), "empty or ambiguous release scope")
-    require(isinstance(deferrals, dict) and set(deferrals) <= identifiers
-            and all(isinstance(reason, str) and reason.strip() for reason in deferrals.values()),
-            "deferrals must name scoped Stories with explicit reasons")
-    for story in stories:
-        require(story["version"]["id"] == release["id"] and story["project"]["id"] == context["project_id"],
-                "Story scope association differs")
-        require(story["status"] in {"Closed", "Rejected"} or str(story["id"]) in deferrals,
-                f"Story {story['id']} is not complete or explicitly deferred")
-    return {"release_id": release["id"], "release_name": release["name"],
-            "project_id": context["project_id"], "initiative_id": context["initiative_id"],
-            "scope_reference": mapping["scope_reference"], "deferrals": deferrals,
-            "stories": [{"id": s["id"], "status": s["status"]} for s in stories]}
-
-
 def predict(root: Path, candidate: str, evidence: Path) -> str:
     capability = tomllib.loads((root / ".github/release.toml").read_text())
     require(capability["release"]["semantic_release"] is True, "release capability required")
@@ -103,8 +69,7 @@ def predict(root: Path, candidate: str, evidence: Path) -> str:
         return tag
 
 
-def collect(evidence: Path, integration: str, security: str, *, deferrals: dict | None = None,
-            scope_file: str = "") -> dict:
+def collect(evidence: Path, integration: str, security: str) -> dict:
     evidence.mkdir(parents=True, exist_ok=False)
     root = Path(git("rev-parse", "--show-toplevel"))
     candidate, target = os.environ["CANDIDATE_REVISION"], os.environ["TARGET_REVISION"]
@@ -112,20 +77,14 @@ def collect(evidence: Path, integration: str, security: str, *, deferrals: dict 
     require(git("rev-parse", "HEAD") == candidate, "checkout differs from candidate")
     require(git("rev-parse", "--is-shallow-repository") == "false", "complete history required")
     document = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["wood"]
-    mapping, context = document["branching"], document["openproject"]
-    require(mapping["strategy"] == "integration" and type(mapping["release_id"]) is int
-            and mapping["release_id"] > 0 and bool(mapping["scope_reference"]), "approved integration mapping required")
+    mapping = {key: document["branching"][key] for key in ("strategy", "integration_branch")}
+    require(mapping["strategy"] == "integration" and isinstance(mapping["integration_branch"], str)
+            and mapping["integration_branch"] not in {"", "main"}, "integration branch mapping required")
     contract = wood(["contract"], evidence / "wood-contract.log")
     require(contract["branching"]["version"] == 1
             and set(contract["branching"]["strategies"]) >= {"trunk", "release", "integration"}
             and set(contract["branching"]["branch_prefixes"]) >= {"feature", "feat", "fix"},
             "complete Wood branching contract version 1 required")
-    if scope_file:
-        require(not deferrals, "repository deferrals must be declared in the committed scope file")
-        scope = repository_scope(root, candidate, scope_file, mapping, context)
-        (evidence / "scope-release.log").write_text(json.dumps(scope, indent=2) + "\n")
-    else:
-        scope = verify_scope(mapping, context, evidence, deferrals or {})
     incident, approval = os.environ.get("HOTFIX_INCIDENT", ""), os.environ.get("HOTFIX_APPROVAL", "")
     require(bool(incident) == bool(approval), "hotfix requires incident and approval")
     if incident:
@@ -134,9 +93,13 @@ def collect(evidence: Path, integration: str, security: str, *, deferrals: dict 
         require(git("ls-remote", "origin", "refs/heads/main") == target + "\trefs/heads/main", "target main advanced")
     else:
         require(os.environ["CANDIDATE_BRANCH"] == mapping["integration_branch"], "candidate must be development")
-        branch = wood(["repo", "release-readiness"], evidence / "branch-readiness.log")
-        require(branch["main_revision"] == target and branch["integration_revision"] == candidate
-                and branch["main_in_integration"] is True, "candidate/target advanced or hotfix divergence unresolved")
+        # Git ancestry is a technical gate, independent of Wood planning metadata.
+        subprocess.run(["git", "check-ref-format", "refs/heads/" + mapping["integration_branch"]], check=True)
+        require(git("ls-remote", "--exit-code", "origin", "refs/heads/main") == target + "\trefs/heads/main",
+                "target main advanced")
+        require(git("ls-remote", "--exit-code", "origin", "refs/heads/" + mapping["integration_branch"])
+                == candidate + "\trefs/heads/" + mapping["integration_branch"], "candidate advanced")
+        command(["git", "merge-base", "--is-ancestor", target, candidate], evidence / "branch-readiness.log")
     env = {k: v for k, v in os.environ.items() if k not in {"GITHUB_TOKEN", "GH_TOKEN", "OPENPROJECT_API_TOKEN"}}
     capability = tomllib.loads((root / ".github/release.toml").read_text())
     with tempfile.TemporaryDirectory(prefix="release-check-profile-") as temporary:
@@ -158,14 +121,14 @@ def collect(evidence: Path, integration: str, security: str, *, deferrals: dict 
     subprocess.run(["git", "diff", "--exit-code"], check=True)
     subprocess.run(["git", "diff", "--cached", "--exit-code"], check=True)
     require(not git("status", "--porcelain"), "checks introduced untracked or modified candidate contents")
-    result = {"kind": KIND, "version": 1, "repository": os.environ["GITHUB_REPOSITORY"],
+    result = {"kind": KIND, "version": 2, "repository": os.environ["GITHUB_REPOSITORY"],
               "candidate_revision": candidate, "target_revision": target, "branching": mapping,
-              "scope": scope, "next_tag": tag, "passed": True, "mode": "hotfix" if incident else "release",
+              "next_tag": tag, "passed": True, "mode": "hotfix" if incident else "release",
               "incident": incident, "hotfix_approval": approval, "workflow_revision": os.environ["WORKFLOW_REVISION"],
               "observed_at": datetime.now(timezone.utc).isoformat(),
               "run_id": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "checks": {name: {"state": "passed", "log_sha256": hashlib.sha256((evidence / filename).read_bytes()).hexdigest()}
-                         for name, filename in {"scope": "scope-release.log", "validation": "validation.log",
+                         for name, filename in {"validation": "validation.log",
                                                 "integration": "integration.log", "security": "security.log",
                                                 "semantic-impact": "semantic-impact.log"}.items()}}
     result["files"] = {str(path.relative_to(evidence)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -179,12 +142,9 @@ def main() -> int:
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--integration-command", required=True)
     parser.add_argument("--security-command", required=True)
-    parser.add_argument("--deferrals", default="{}")
-    parser.add_argument("--scope-file", default="", help="Explicit committed repository-approved scope; otherwise use live OpenProject.")
     args = parser.parse_args()
     try:
-        collect(args.evidence, args.integration_command, args.security_command,
-                deferrals=json.loads(args.deferrals), scope_file=args.scope_file)
+        collect(args.evidence, args.integration_command, args.security_command)
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         print(f"release readiness failed: {error}; retain check logs")
         return 1

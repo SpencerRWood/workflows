@@ -32,7 +32,8 @@ Set `release_integration: true` on `release.yml`, `release-container.yml`, or
 a main push or an explicitly approved main recovery dispatch and independently verifies:
 
 - The checkout equals the event SHA and current remote main.
-- Root integration mapping includes a release ID and approved scope reference.
+- Root integration mapping names the strategy and development branch. Planning
+  release IDs, Story states and scope references are not publication gates.
 - Effective main rulesets, or classic protection when no rulesets apply, require
   PR review and CI, including the configured `readiness_check` (default
   `release-readiness`). Classic protection inspection requires administration read;
@@ -50,46 +51,41 @@ a main push or an explicitly approved main recovery dispatch and independently v
 - Required trusted non-author reviews approve that exact candidate before merge.
   An approving review authorizes release; where no independent review is required,
   a trusted maintainer's premerge `Release-Approval: <full candidate SHA>` comment
-  supplies explicit approval. Outstanding change requests fail. Deferrals also
-  require a premerge `Release-Deferrals: <sorted comma-separated Story IDs>` comment.
+  supplies explicit approval. Outstanding change requests fail.
 
-Private evidence may require `release_read_token`: a read-only token scoped to
-contents, pull requests, checks and Actions, plus administration read for classic
-protection inspection. It is forwarded to release/deployment authorization and
-readiness evidence inspection. The job retains PR, reviews,
-checks, planning mapping, source/merge SHA and run/attempt in an authorization artifact.
+Private technical evidence uses the built-in GitHub token. Callers must explicitly
+grant `actions: read`, `checks: read` and `pull-requests: read` alongside their
+existing contents permission; the authorization job has only these four read
+permissions. No separate token is needed for a ruleset-protected repository.
+The optional `release_read_token` remains available for specialized existing GitHub
+read access; classic protection inspection additionally needs administration read,
+which the built-in token cannot supply. The job retains PR, reviews, checks, branch
+mapping, source/merge SHA and run/attempt in an authorization artifact.
 Publication jobs acquire their existing writer permissions only after authorization
 and validation succeed. No broad administrator/bot bypass is introduced.
 
 The reusable `release-readiness.yml` runs on main PRs at their exact candidate SHA
 with read-only GitHub permissions and pinned workflow/Wood source SHAs. The shared
-helper verifies the live OpenProject release and complete/deferred Story scope,
-Wood ancestry readiness, accumulated Wood validation, required consumer-owned
+helper verifies Git ancestry, accumulated Wood validation, required consumer-owned
 `integration_command` and `security_command`, and nonpublishing semantic impact.
-It saves candidate/target/scope/run-bound evidence and hashes of retained logs;
+It saves candidate/target/run-bound evidence and hashes of retained logs;
 authorization downloads and verifies that artifact from the pinned readiness run.
-Supply `openproject_api_token` through the caller's approved credential integration
-and `OPENPROJECT_URL` as a repository variable. Application checks receive no
+No planning API, OpenProject credential, scope file or Story-deferral approval
+is used by readiness or publication. Application checks receive no
 GitHub/OpenProject token; supported dbt credentials remain available for validation.
 The helper rejects modified or untracked candidate contents after the checks.
 
-Consumers that explicitly approve repository-owned release scope may pass
-`scope_file: .github/release-scope.json` instead. No OpenProject token or API lookup
-is used in that mode. The committed version-1 JSON declares `project_id`,
-`initiative_id`, `release_id`, `release_name`, `scope_reference`,
-`approval_reference` and `stories`; each Story declares `id`, `merge_commits`
-(full immutable implementation revisions already in the candidate) and
-`defer_reason` (empty when implementation is integrated). IDs/mapping, bounded
-schema, file content and implementation ancestry are verified. A reason records
-an explicitly deferred release boundary, not a Closed OpenProject status.
+### Breaking contract migration
 
-The receipt identifies repository authority and explicitly disclaims live planning
-verification. Publication independently rechecks the exact committed manifest and
-its hash/ancestry, in addition to the existing pinned workflow/run/log checks.
-All technical checks and semantic impact remain mandatory; scoped deferrals still
-need the exact premerge approval marker. Missing/invalid scope never falls back
-to an alternate authority. Omitting `scope_file` retains live OpenProject mode and
-its existing runtime credential requirements. No other consumers are opted in.
+The planning inputs `scope_file`, `deferred_stories` and `openproject_api_token`
+have been removed, with no fallback or compatibility loader. Remove them and any
+planning-only files from callers when updating the immutable workflow pin. Technical
+readiness receipts now use version 2 and contain no planning scope. Old receipts
+are rejected; rerun candidate checks using the same new helper revision as the
+publisher. Add the three GitHub read permissions to release/deployment callers,
+including coordinated-image callers. Existing immutable pins remain unchanged.
+Planning reconciliation and deployed acceptance remain separate responsibilities;
+publication neither closes Stories nor certifies a deployment.
 
 Main protection provisioning and consumer adoption remain OP-556/OP-557 work.
 The [representative release caller](../tests/fixtures/br02/release.yml) is a fixture;
