@@ -131,5 +131,6 @@ jobs:
         with:
           name: release-readiness-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-readiness/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
