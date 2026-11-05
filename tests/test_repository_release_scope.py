@@ -49,6 +49,15 @@ class RepositoryScopeTests(CandidateFixture):
             self.collect(scope_file=self.filename, security="exit 42")
         self.assertFalse((self.evidence / "readiness.json").exists())
 
+    def test_tag_at_merge_uses_supported_generator_interface_without_publication(self):
+        capability = self.root / ".github/release.toml"
+        capability.write_text(capability.read_text() + "tag_merged_commit=true\n")
+        self.git("add", ".github/release.toml")
+        self.commit_scope(self.manifest)
+        record = self.collect(scope_file=self.filename)
+        self.assertEqual(record["next_tag"], "v0.2.0")
+        self.assertEqual(self.git("ls-remote", "origin", "refs/tags/v0.2.0"), "")
+
     def test_deferrals_must_be_in_approved_file(self):
         with self.assertRaisesRegex(ValueError, "committed scope"):
             self.collect(scope_file=self.filename, deferrals={"1": "caller bypass"})
