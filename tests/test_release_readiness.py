@@ -145,7 +145,19 @@ class ReleaseReadinessTests(CandidateFixture):
         self.assertEqual(result["next_tag"], "v0.1.1")
 
     def test_saved_evidence_is_verified_against_pinned_run_and_logs(self):
-        record = self.collect()
+        # Wood retains its coverage database alongside logs. Artifact upload must
+        # include hidden files so the independently verified inventory is exact.
+        original = self.wood
+        def with_coverage(args, log, **kwargs):
+            data = original(args, log, **kwargs)
+            if args == ["repo", "validate"]:
+                directory = log.parent / "wood-validate"
+                directory.mkdir()
+                (directory / ".coverage").write_bytes(b"disposable coverage fixture")
+            return data
+        with patch.object(self, "wood", with_coverage):
+            record = self.collect()
+        self.assertIn("wood-validate/.coverage", record["files"])
         stamp = datetime.now(timezone.utc).isoformat()
         check = {"id": 1, "details_url": "https://github.com/owner/fixture/actions/runs/123/job/456"}
         run = {"head_sha": self.head, "event": "pull_request", "status": "completed", "conclusion": "success",
