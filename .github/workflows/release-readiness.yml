@@ -19,6 +19,10 @@ on:
         description: JSON map of scoped Story IDs to reasons, requiring explicit release approval.
         type: string
         default: '{}'
+      scope_file:
+        description: Explicit committed repository-approved scope with implementation ancestry; empty retains live OpenProject verification.
+        type: string
+        default: ''
       hotfix_incident:
         type: string
         default: ''
@@ -42,7 +46,7 @@ on:
       dbt_schema:
         required: false
       openproject_api_token:
-        required: true
+        required: false
       release_read_token:
         required: false
 permissions:
@@ -128,13 +132,14 @@ jobs:
           INTEGRATION_COMMAND: ${{ inputs.integration_command }}
           SECURITY_COMMAND: ${{ inputs.security_command }}
           DEFERRED_STORIES: ${{ inputs.deferred_stories }}
+          SCOPE_FILE: ${{ inputs.scope_file }}
           HOTFIX_INCIDENT: ${{ inputs.hotfix_incident }}
           HOTFIX_APPROVAL: ${{ inputs.hotfix_approval }}
         run: |
           python3 "$RUNNER_TEMP/workflows/scripts/release_readiness.py" \
             --evidence "$RUNNER_TEMP/release-readiness" \
             --integration-command "$INTEGRATION_COMMAND" --security-command "$SECURITY_COMMAND" \
-            --deferrals "$DEFERRED_STORIES"
+            --deferrals "$DEFERRED_STORIES" --scope-file "$SCOPE_FILE"
       - name: Retain candidate-bound evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

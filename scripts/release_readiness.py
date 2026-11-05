@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import tomllib
 
+from release_scope import repository_scope
+
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 KIND = "wood-shared-release-readiness"
 
@@ -102,7 +104,8 @@ def predict(root: Path, candidate: str, evidence: Path) -> str:
         return tag
 
 
-def collect(evidence: Path, integration: str, security: str, *, deferrals: dict | None = None) -> dict:
+def collect(evidence: Path, integration: str, security: str, *, deferrals: dict | None = None,
+            scope_file: str = "") -> dict:
     evidence.mkdir(parents=True, exist_ok=False)
     root = Path(git("rev-parse", "--show-toplevel"))
     candidate, target = os.environ["CANDIDATE_REVISION"], os.environ["TARGET_REVISION"]
@@ -118,7 +121,12 @@ def collect(evidence: Path, integration: str, security: str, *, deferrals: dict 
             and set(contract["branching"]["strategies"]) >= {"trunk", "release", "integration"}
             and set(contract["branching"]["branch_prefixes"]) >= {"feature", "feat", "fix"},
             "complete Wood branching contract version 1 required")
-    scope = verify_scope(mapping, context, evidence, deferrals or {})
+    if scope_file:
+        require(not deferrals, "repository deferrals must be declared in the committed scope file")
+        scope = repository_scope(root, candidate, scope_file, mapping, context)
+        (evidence / "scope-release.log").write_text(json.dumps(scope, indent=2) + "\n")
+    else:
+        scope = verify_scope(mapping, context, evidence, deferrals or {})
     incident, approval = os.environ.get("HOTFIX_INCIDENT", ""), os.environ.get("HOTFIX_APPROVAL", "")
     require(bool(incident) == bool(approval), "hotfix requires incident and approval")
     if incident:
@@ -173,9 +181,11 @@ def main() -> int:
     parser.add_argument("--integration-command", required=True)
     parser.add_argument("--security-command", required=True)
     parser.add_argument("--deferrals", default="{}")
+    parser.add_argument("--scope-file", default="", help="Explicit committed repository-approved scope; otherwise use live OpenProject.")
     args = parser.parse_args()
     try:
-        collect(args.evidence, args.integration_command, args.security_command, deferrals=json.loads(args.deferrals))
+        collect(args.evidence, args.integration_command, args.security_command,
+                deferrals=json.loads(args.deferrals), scope_file=args.scope_file)
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         print(f"release readiness failed: {error}; retain check logs")
         return 1
