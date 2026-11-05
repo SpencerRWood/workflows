@@ -185,6 +185,9 @@ class WorkflowIntegrationTests(unittest.TestCase):
         self.assertNotIn("deferred_stories", contract["inputs"])
         self.assertNotIn("openproject_api_token", contract["secrets"])
         self.assertNotIn("OPENPROJECT_", str(document["jobs"]))
+        upload = next(step for step in document["jobs"]["release-readiness"]["steps"]
+                      if step.get("name") == "Retain candidate-bound evidence")
+        self.assertIs(upload["with"]["include-hidden-files"], True)
 
     def test_validation_and_readiness_have_no_publication_credentials(self):
         for name in ("release-readiness.yml",):
