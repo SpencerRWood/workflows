@@ -22,6 +22,7 @@ Use root [tool.wood.branching]: feature branches and Story PRs start from and ta
 
 ## Safety
 - Keep release checkout immutable and deployment rollback limited to repository-defined runtime configuration.
+- Release publication verifies technical checks and explicit approval, never planning scope, Story status or deferral files. OpenProject credentials are not release inputs.
 
 ## Branching strategy
 

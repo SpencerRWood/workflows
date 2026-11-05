@@ -58,6 +58,11 @@ concurrency:
 
 jobs:
   authorization:
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
     uses: ./.github/workflows/authorize-operation.yml
     with:
       workflow_revision: ${{ inputs.workflow_revision }}
@@ -142,6 +147,9 @@ jobs:
         image: ${{ fromJSON(needs.plan.outputs.images) }}
     permissions:
       contents: write
+      actions: read
+      checks: read
+      pull-requests: read
       packages: write
       id-token: write
       attestations: write
@@ -172,6 +180,9 @@ jobs:
     if: needs.plan.outputs.tag != ''
     permissions:
       contents: write
+      actions: read
+      checks: read
+      pull-requests: read
     uses: ./.github/workflows/release.yml
     with:
       workflow_revision: ${{ inputs.workflow_revision }}

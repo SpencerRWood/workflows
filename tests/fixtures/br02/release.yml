@@ -16,24 +16,21 @@ jobs:
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     uses: SpencerRWood/workflows/.github/workflows/release-readiness.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     with:
-      # The consumer owns release scope, security/integration checks and
+      # The consumer owns security/integration checks and
       # nonpublishing semantic impact verification. No deployment belongs here.
       workflow_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       wood_revision: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
       integration_command: uv run --frozen pytest tests/integration
       security_command: uv run --frozen pip-audit
-    secrets:
-      # Supplied by the caller's approved Infisical-backed credential integration.
-      openproject_api_token: ${{ secrets.OPENPROJECT_API_TOKEN }}
-      release_read_token: ${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
+      actions: read
+      checks: read
+      pull-requests: read
     uses: SpencerRWood/workflows/.github/workflows/release.yml@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     with:
       workflow_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       release_integration: true
       readiness_check: readiness / release-readiness
-    secrets:
-      release_read_token: ${{ secrets.RELEASE_EVIDENCE_READ_TOKEN }}
