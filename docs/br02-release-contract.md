@@ -73,6 +73,24 @@ and `OPENPROJECT_URL` as a repository variable. Application checks receive no
 GitHub/OpenProject token; supported dbt credentials remain available for validation.
 The helper rejects modified or untracked candidate contents after the checks.
 
+Consumers that explicitly approve repository-owned release scope may pass
+`scope_file: .github/release-scope.json` instead. No OpenProject token or API lookup
+is used in that mode. The committed version-1 JSON declares `project_id`,
+`initiative_id`, `release_id`, `release_name`, `scope_reference`,
+`approval_reference` and `stories`; each Story declares `id`, `merge_commits`
+(full immutable implementation revisions already in the candidate) and
+`defer_reason` (empty when implementation is integrated). IDs/mapping, bounded
+schema, file content and implementation ancestry are verified. A reason records
+an explicitly deferred release boundary, not a Closed OpenProject status.
+
+The receipt identifies repository authority and explicitly disclaims live planning
+verification. Publication independently rechecks the exact committed manifest and
+its hash/ancestry, in addition to the existing pinned workflow/run/log checks.
+All technical checks and semantic impact remain mandatory; scoped deferrals still
+need the exact premerge approval marker. Missing/invalid scope never falls back
+to an alternate authority. Omitting `scope_file` retains live OpenProject mode and
+its existing runtime credential requirements. No other consumers are opted in.
+
 Main protection provisioning and consumer adoption remain OP-556/OP-557 work.
 The [representative release caller](../tests/fixtures/br02/release.yml) is a fixture;
 its sample SHAs and repository-owned integration/security commands must be replaced

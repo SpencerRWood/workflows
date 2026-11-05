@@ -15,6 +15,7 @@ import urllib.parse
 from pathlib import Path
 
 from release_readiness import KIND
+from release_scope import repository_scope
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
@@ -93,9 +94,17 @@ def readiness_evidence(repository: str, check: dict, head: str, workflow: str,
                     f"readiness check/log differs: {name}")
         require(record["scope"]["release_id"] == mapping["release_id"]
                 and record["scope"]["scope_reference"] == mapping["scope_reference"], "readiness scope differs")
-        require(bool(record["scope"]["stories"]) and all(s["status"] in {"Closed", "Rejected"}
-                or str(s["id"]) in record["scope"]["deferrals"] for s in record["scope"]["stories"]),
-                "unfinished release Stories")
+        if "source" in record["scope"]:
+            require(record["scope"]["source"]["type"] == "repository", "unknown scope authority")
+            repository_root = Path(git("rev-parse", "--show-toplevel"))
+            document = tomllib.loads(git("show", head + ":pyproject.toml"))
+            expected = repository_scope(repository_root, head, record["scope"]["source"]["path"],
+                                        mapping, document["tool"]["wood"]["openproject"])
+            require(record["scope"] == expected, "repository scope receipt differs from committed authority")
+        else:
+            require(bool(record["scope"]["stories"]) and all(s["status"] in {"Closed", "Rejected"}
+                    or str(s["id"]) in record["scope"]["deferrals"] for s in record["scope"]["stories"]),
+                    "unfinished release Stories")
         subprocess.run(["git", "check-ref-format", "refs/tags/" + record["next_tag"]], check=True)
         return record
 
